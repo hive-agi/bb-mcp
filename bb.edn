@@ -1,0 +1,11 @@
+{:paths ["src"]
+ :deps {;; cheshire is built into babashka
+        }
+ :tasks
+ {:requires ([babashka.fs :as fs])
+
+  mcp {:doc "Start MCP server on stdio"
+       :task (exec 'bb-mcp.core/-main)}
+
+  test {:doc "Run tests"
+        :task (shell "bb --config bb.edn -m bb-mcp.test-runner")}}}
