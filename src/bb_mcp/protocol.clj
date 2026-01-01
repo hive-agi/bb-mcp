@@ -51,7 +51,7 @@
 ;; Stdio communication
 (defn read-message
   "Read a JSON-RPC message from stdin.
-   MCP uses Content-Length header + JSON body."
+   Supports both newline-delimited JSON (Claude Code) and Content-Length format."
   []
   (try
     (loop []
@@ -61,7 +61,7 @@
           (str/blank? line)
           (recur)
 
-          ;; Found Content-Length header
+          ;; Found Content-Length header (HTTP-style format)
           (str/starts-with? line "Content-Length:")
           (let [content-length (parse-long (str/trim (subs line 16)))]
             ;; Read empty line after header
@@ -72,19 +72,20 @@
                 (.append sb (char (.read *in*))))
               (json/parse-string (str sb) true)))
 
+          ;; Try to parse as JSON directly (newline-delimited format)
+          (str/starts-with? line "{")
+          (json/parse-string line true)
+
           ;; Unexpected line - skip it
           :else (recur))))
     (catch Exception e
       nil)))
 
 (defn write-message
-  "Write a JSON-RPC message to stdout with Content-Length header."
+  "Write a JSON-RPC message to stdout as newline-delimited JSON."
   [msg]
-  (let [json-str (json/generate-string msg)
-        content-length (count (.getBytes json-str "UTF-8"))]
-    (println (str "Content-Length: " content-length))
-    (println)
-    (print json-str)
+  (let [json-str (json/generate-string msg)]
+    (println json-str)
     (flush)))
 
 (defn send-notification
