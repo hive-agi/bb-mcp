@@ -34,13 +34,13 @@
     (sequential? x) (bencode-list x)
     :else (bencode-string (str x))))
 
-(defn- read-bencode-string [^BufferedReader reader length]
+(defn- read-bencode-string [reader length]
   (let [sb (StringBuilder.)]
     (dotimes [_ length]
       (.append sb (char (.read reader))))
     (str sb)))
 
-(defn- read-bencode-int [^BufferedReader reader]
+(defn- read-bencode-int [reader]
   (loop [sb (StringBuilder.)]
     (let [c (char (.read reader))]
       (if (= c \e)
@@ -49,7 +49,7 @@
 
 (declare bdecode)
 
-(defn- read-bencode-list [^BufferedReader reader]
+(defn- read-bencode-list [reader]
   (loop [result []]
     (let [c (char (.read reader))]
       (if (= c \e)
@@ -58,7 +58,7 @@
           (.unread reader (int c))
           (recur (conj result (bdecode reader))))))))
 
-(defn- read-bencode-dict [^BufferedReader reader]
+(defn- read-bencode-dict [reader]
   (loop [result {}]
     (let [c (char (.read reader))]
       (if (= c \e)
@@ -69,7 +69,7 @@
                 v (bdecode reader)]
             (recur (assoc result (keyword k) v))))))))
 
-(defn bdecode [^BufferedReader reader]
+(defn bdecode [reader]
   (let [c (char (.read reader))]
     (cond
       (= c \i) (read-bencode-int reader)
