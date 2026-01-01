@@ -51,15 +51,19 @@
   "Read a JSON-RPC message from stdin.
    MCP uses Content-Length header + JSON body."
   []
-  (when-let [header-line (read-line)]
-    (when (str/starts-with? header-line "Content-Length:")
-      (let [content-length (parse-long (str/trim (subs header-line 16)))]
-        ;; Read empty line after header
-        (read-line)
-        ;; Read JSON body
-        (let [buffer (char-array content-length)
-              _ (.read *in* buffer 0 content-length)]
-          (json/parse-string (String. buffer) true))))))
+  (try
+    (when-let [header-line (read-line)]
+      (when (str/starts-with? header-line "Content-Length:")
+        (let [content-length (parse-long (str/trim (subs header-line 16)))]
+          ;; Read empty line after header
+          (read-line)
+          ;; Read JSON body character by character
+          (let [sb (StringBuilder.)]
+            (dotimes [_ content-length]
+              (.append sb (char (.read *in*))))
+            (json/parse-string (str sb) true)))))
+    (catch Exception e
+      nil)))
 
 (defn write-message
   "Write a JSON-RPC message to stdout with Content-Length header."

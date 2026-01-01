@@ -60,12 +60,11 @@
 
 ;; Main loop
 (defn run-server []
-  (binding [*in* (java.io.PushbackReader. *in*)]
-    (loop []
-      (when-let [msg (proto/read-message)]
-        (when-let [response (handle-method msg)]
-          (proto/write-message response))
-        (recur)))))
+  (loop []
+    (when-let [msg (proto/read-message)]
+      (when-let [response (handle-method msg)]
+        (proto/write-message response))
+      (recur))))
 
 (defn -main [& _args]
   (run-server))
