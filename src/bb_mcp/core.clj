@@ -5,22 +5,27 @@
             [bb-mcp.tools.file :as file]
             [bb-mcp.tools.grep :as grep]
             [bb-mcp.tools.nrepl :as nrepl]
+            [bb-mcp.tools.emacs :as emacs]
             [clojure.string :as str]))
 
-;; Tool registry
+;; Tool registry - native tools + emacs wrappers
 (def tools
-  [{:spec bash/tool-spec
-    :handler (fn [args] (bash/format-result (bash/execute args)))}
-   {:spec file/read-file-spec
-    :handler file/read-file}
-   {:spec file/write-file-spec
-    :handler file/write-file}
-   {:spec file/glob-spec
-    :handler file/glob-files}
-   {:spec grep/tool-spec
-    :handler grep/execute}
-   {:spec nrepl/tool-spec
-    :handler nrepl/execute}])
+  (concat
+   ;; Native bb-mcp tools (no JVM needed)
+   [{:spec bash/tool-spec
+     :handler (fn [args] (bash/format-result (bash/execute args)))}
+    {:spec file/read-file-spec
+     :handler file/read-file}
+    {:spec file/write-file-spec
+     :handler file/write-file}
+    {:spec file/glob-spec
+     :handler file/glob-files}
+    {:spec grep/tool-spec
+     :handler grep/execute}
+    {:spec nrepl/tool-spec
+     :handler nrepl/execute}]
+   ;; Emacs tools (delegate to shared nREPL with emacs-mcp)
+   emacs/tools))
 
 (defn find-tool [name]
   (first (filter #(= name (get-in % [:spec :name])) tools)))
