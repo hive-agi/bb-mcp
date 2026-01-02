@@ -1,0 +1,45 @@
+{
+  "date": "2026-01-02",
+  "focus_area": "bb-mcp modular refactoring + swarm testing",
+  "branches_created": [],
+  "key_files": [
+    "src/bb_mcp/tools/emacs.clj",
+    "src/bb_mcp/tools/emacs/buffer.clj",
+    "src/bb_mcp/tools/emacs/magit.clj",
+    "src/bb_mcp/tools/emacs/memory.clj",
+    "src/bb_mcp/tools/emacs/kanban.clj",
+    "src/bb_mcp/tools/emacs/swarm.clj",
+    "src/bb_mcp/tools/emacs/projectile.clj",
+    "src/bb_mcp/tools/emacs/org.clj",
+    "src/bb_mcp/tools/emacs/prompt.clj",
+    "src/bb_mcp/tools/emacs/cider.clj",
+    "src/bb_mcp/tools/emacs/context.clj",
+    "test/bb_mcp/tools/emacs_test.clj"
+  ],
+  "adrs_created": [],
+  "completed_tasks": [
+    "Extracted 10 domain modules from monolithic emacs.clj following DDD bounded contexts",
+    "Updated swarm.clj with 4 new tools: swarm_pending_prompts, swarm_respond_prompt, jvm_cleanup, resource_guard",
+    "Reduced emacs.clj from 1339 lines to 47 lines (clean aggregator)",
+    "Total tool count: 83 tools across 10 modules",
+    "All tests passing: 9 tests, 933 assertions",
+    "Tested all swarm capabilities including human-in-the-loop workflow",
+    "Migrated 4 clojure-mcp servers from global to project scope",
+    "Cleaned up orphaned JVM processes (killed 6)"
+  ],
+  "in_progress_tasks": [
+    "Uncommitted changes in bb-mcp (10 new module files + updated emacs.clj and tests)"
+  ],
+  "blocking_issues": [],
+  "next_actions": [
+    "Commit bb-mcp modular refactoring",
+    "Consider adding emacs MCP to bb-mcp project scope",
+    "Remove failing global MCPs (vibe_kanban, dynamic-kanban) or fix them"
+  ],
+  "decisions_made": [
+    "DDD module structure: one file per bounded context (buffer, magit, memory, kanban, swarm, projectile, org, prompt, cider, context)",
+    "Swarm tools include 4 new human-mode tools for permission prompt handling",
+    "clojure-mcp servers should be project-scoped, not global",
+    "Keep emacs (bb-mcp) global since it's cross-project utility"
+  ]
+}

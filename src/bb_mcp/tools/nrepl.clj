@@ -1,88 +1,169 @@
 (ns bb-mcp.tools.nrepl
   "nREPL client for delegating Clojure eval to shared JVM."
-  (:require [babashka.process :as p]
-            [clojure.string :as str]
-            [cheshire.core :as json])
+  (:require [clojure.string :as str])
   (:import [java.net Socket]
-           [java.io BufferedReader InputStreamReader PrintWriter]))
+           [java.io File OutputStream InputStream
+            BufferedInputStream BufferedOutputStream
+            ByteArrayOutputStream PushbackInputStream]))
 
-;; Bencode implementation for nREPL protocol
-(declare bencode)
+;; =============================================================================
+;; Bencode implementation using byte-based I/O
+;;
+;; Bencode is a BINARY protocol - lengths are in BYTES, not characters.
+;; Previous implementation used character streams which corrupted UTF-8.
+;; =============================================================================
 
-(defn- bencode-string [s]
-  (str (count s) ":" s))
+(declare bencode-to-bytes)
 
-(defn- bencode-int [n]
-  (str "i" n "e"))
+(defn- bencode-string-bytes
+  "Encode string to bencode bytes: <byte_length>:<utf8_bytes>"
+  ^bytes [^String s]
+  (let [str-bytes (.getBytes s "UTF-8")
+        str-len (count str-bytes)
+        len-str (str str-len)
+        len-bytes (.getBytes ^String len-str "US-ASCII")
+        len-len (count len-bytes)
+        result (byte-array (+ len-len 1 str-len))]
+    (System/arraycopy len-bytes 0 result 0 len-len)
+    (aset-byte result len-len (byte (int \:)))
+    (System/arraycopy str-bytes 0 result (+ len-len 1) str-len)
+    result))
 
-(defn- bencode-list [coll]
-  (str "l" (str/join "" (map bencode coll)) "e"))
+(defn- bencode-int-bytes
+  "Encode integer to bencode bytes: i<number>e"
+  ^bytes [n]
+  (.getBytes (str "i" n "e") "US-ASCII"))
 
-(defn- bencode-dict [m]
-  (str "d"
-       (str/join ""
-                 (mapcat (fn [[k v]]
-                           [(bencode-string (name k)) (bencode v)])
-                         (sort-by (comp str key) m)))
-       "e"))
+(defn- concat-byte-arrays
+  "Concatenate multiple byte arrays."
+  ^bytes [arrays]
+  (let [total (reduce + 0 (map count arrays))
+        result (byte-array total)]
+    (loop [arrays arrays
+           offset 0]
+      (if (seq arrays)
+        (let [^bytes arr (first arrays)
+              len (count arr)]
+          (System/arraycopy arr 0 result offset len)
+          (recur (rest arrays) (+ offset len)))
+        result))))
 
-(defn bencode [x]
+(defn- bencode-list-bytes
+  "Encode list to bencode bytes: l<items>e"
+  ^bytes [coll]
+  (let [items (mapv bencode-to-bytes coll)]
+    (concat-byte-arrays
+     (into [(byte-array [(byte (int \l))])]
+           (conj (vec items) (byte-array [(byte (int \e))]))))))
+
+(defn- bencode-dict-bytes
+  "Encode map to bencode bytes: d<key1><val1>...e"
+  ^bytes [m]
+  (let [sorted-entries (sort-by (comp str key) m)
+        parts (mapcat (fn [[k v]]
+                        [(bencode-string-bytes (name k))
+                         (bencode-to-bytes v)])
+                      sorted-entries)]
+    (concat-byte-arrays
+     (into [(byte-array [(byte (int \d))])]
+           (conj (vec parts) (byte-array [(byte (int \e))]))))))
+
+(defn bencode-to-bytes
+  "Convert Clojure data to bencode bytes."
+  ^bytes [x]
   (cond
-    (string? x) (bencode-string x)
-    (integer? x) (bencode-int x)
-    (map? x) (bencode-dict x)
-    (sequential? x) (bencode-list x)
-    :else (bencode-string (str x))))
+    (string? x) (bencode-string-bytes x)
+    (integer? x) (bencode-int-bytes x)
+    (map? x) (bencode-dict-bytes x)
+    (sequential? x) (bencode-list-bytes x)
+    :else (bencode-string-bytes (str x))))
 
-(defn- read-bencode-string [reader length]
-  (let [sb (StringBuilder.)]
-    (dotimes [_ length]
-      (.append sb (char (.read reader))))
-    (str sb)))
+;; =============================================================================
+;; Bdecode - reading bencode from byte stream
+;; =============================================================================
 
-(defn- read-bencode-int [reader]
-  (loop [sb (StringBuilder.)]
-    (let [c (char (.read reader))]
-      (if (= c \e)
-        (parse-long (str sb))
-        (recur (.append sb c))))))
+(declare bdecode-from-stream)
 
-(declare bdecode)
+(defn- read-byte!
+  "Read a single byte, returning -1 on EOF."
+  [^PushbackInputStream in]
+  (.read in))
 
-(defn- read-bencode-list [reader]
+(defn- unread-byte!
+  "Push a byte back to the stream."
+  [^PushbackInputStream in b]
+  (.unread in (int b)))
+
+(defn- read-bencode-string-bytes
+  "Read bencode string given its byte length."
+  [^PushbackInputStream in length]
+  (let [buf (byte-array length)
+        n (.read in buf 0 length)]
+    (when (= n length)
+      (String. buf "UTF-8"))))
+
+(defn- read-bencode-int-from-stream
+  "Read bencode integer until 'e'."
+  [^PushbackInputStream in]
+  (let [baos (ByteArrayOutputStream.)]
+    (loop []
+      (let [b (read-byte! in)]
+        (if (= b (int \e))
+          (parse-long (String. (.toByteArray baos) "US-ASCII"))
+          (do
+            (.write baos b)
+            (recur)))))))
+
+(defn- read-length-prefix
+  "Read the length prefix of a bencode string (digits before colon)."
+  [^PushbackInputStream in first-byte]
+  (let [baos (ByteArrayOutputStream.)]
+    (.write baos first-byte)
+    (loop []
+      (let [b (read-byte! in)]
+        (if (= b (int \:))
+          (parse-long (String. (.toByteArray baos) "US-ASCII"))
+          (do
+            (.write baos b)
+            (recur)))))))
+
+(defn- read-bencode-list-from-stream
+  "Read bencode list until 'e'."
+  [^PushbackInputStream in]
   (loop [result []]
-    (let [c (char (.read reader))]
-      (if (= c \e)
+    (let [b (read-byte! in)]
+      (if (= b (int \e))
         result
         (do
-          (.unread reader (int c))
-          (recur (conj result (bdecode reader))))))))
+          (unread-byte! in b)
+          (recur (conj result (bdecode-from-stream in))))))))
 
-(defn- read-bencode-dict [reader]
+(defn- read-bencode-dict-from-stream
+  "Read bencode dict until 'e'."
+  [^PushbackInputStream in]
   (loop [result {}]
-    (let [c (char (.read reader))]
-      (if (= c \e)
+    (let [b (read-byte! in)]
+      (if (= b (int \e))
         result
         (do
-          (.unread reader (int c))
-          (let [k (bdecode reader)
-                v (bdecode reader)]
+          (unread-byte! in b)
+          (let [k (bdecode-from-stream in)
+                v (bdecode-from-stream in)]
             (recur (assoc result (keyword k) v))))))))
 
-(defn bdecode [reader]
-  (let [c (char (.read reader))]
-    (cond
-      (= c \i) (read-bencode-int reader)
-      (= c \l) (read-bencode-list reader)
-      (= c \d) (read-bencode-dict reader)
-      (Character/isDigit c)
-      (let [length-str (loop [sb (StringBuilder. (str c))]
-                         (let [nc (char (.read reader))]
-                           (if (= nc \:)
-                             (str sb)
-                             (recur (.append sb nc)))))]
-        (read-bencode-string reader (parse-long length-str)))
-      :else nil)))
+(defn bdecode-from-stream
+  "Decode bencode from PushbackInputStream."
+  [^PushbackInputStream in]
+  (let [b (read-byte! in)]
+    (when (>= b 0)
+      (cond
+        (= b (int \i)) (read-bencode-int-from-stream in)
+        (= b (int \l)) (read-bencode-list-from-stream in)
+        (= b (int \d)) (read-bencode-dict-from-stream in)
+        (Character/isDigit (char b))
+        (let [length (read-length-prefix in b)]
+          (read-bencode-string-bytes in length))
+        :else nil))))
 
 ;; nREPL client
 (defn eval-code
@@ -91,19 +172,18 @@
   (let [host (or host "localhost")
         timeout (or timeout-ms 30000)]
     (try
-      (with-open [socket (doto (Socket. host port)
+      (with-open [socket (doto (Socket. ^String host ^int port)
                            (.setSoTimeout timeout))
-                  out (PrintWriter. (.getOutputStream socket) true)
-                  in (java.io.PushbackReader.
-                      (BufferedReader.
-                       (InputStreamReader. (.getInputStream socket))))]
-        ;; Send eval request
-        (.print out (bencode {:op "eval" :code code}))
-        (.flush out)
+                  out (BufferedOutputStream. (.getOutputStream socket))
+                  in (PushbackInputStream. (BufferedInputStream. (.getInputStream socket)))]
+        ;; Send eval request as bytes
+        (let [request-bytes (bencode-to-bytes {:op "eval" :code code})]
+          (.write out request-bytes)
+          (.flush out))
 
         ;; Read responses until "done" status
         (loop [results {:value nil :out "" :err ""}]
-          (if-let [response (bdecode in)]
+          (if-let [response (bdecode-from-stream in)]
             (let [status (get response :status [])]
               (if (some #(= % "done") status)
                 (if (:ex response)
