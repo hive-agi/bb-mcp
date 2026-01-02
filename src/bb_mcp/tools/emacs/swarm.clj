@@ -86,11 +86,16 @@
             :required ["task_id"]}})
 
 (defn swarm-collect [{:keys [task_id timeout_ms port]}]
-  (let [code (format "(do (require '[emacs-mcp.tools.swarm :as s])
+  (let [;; emacs-mcp's handle-swarm-collect uses 300000ms (5 min) default internally
+        ;; nREPL timeout must be longer to allow polling to complete
+        effective-timeout (or timeout_ms 300000)
+        ;; Add buffer for nREPL overhead (10% extra)
+        nrepl-timeout (+ effective-timeout 30000)
+        code (format "(do (require '[emacs-mcp.tools.swarm :as s])
                          (s/handle-swarm-collect {:task_id %s :timeout_ms %s}))"
                      (pr-str task_id)
-                     (if timeout_ms (str timeout_ms) "nil"))]
-    (emacs-eval code :port port :timeout_ms (or timeout_ms 60000))))
+                     (str effective-timeout))]
+    (emacs-eval code :port port :timeout_ms nrepl-timeout)))
 
 ;; =============================================================================
 ;; Tool: swarm_list_presets
