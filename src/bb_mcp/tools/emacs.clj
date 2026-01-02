@@ -751,6 +751,416 @@ Use after mcp_memory_query_metadata to fetch specific entries."
                      (pr-str pattern))]
     (emacs-eval code :port port :timeout_ms 30000)))
 
+(def projectile-find-file-spec
+  {:name "projectile_find_file"
+   :description "Find and open a file in the current project."
+   :schema {:type "object"
+            :properties {:filename {:type "string" :description "Filename to find"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["filename"]}})
+
+(defn projectile-find-file [{:keys [filename port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.projectile :as p])
+                         (p/handle-projectile-find-file {:filename %s}))"
+                     (pr-str filename))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def projectile-recent-spec
+  {:name "projectile_recent"
+   :description "Get recently visited files in the current project."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn projectile-recent [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.projectile :as p])
+                  (p/handle-projectile-recent {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def projectile-list-projects-spec
+  {:name "projectile_list_projects"
+   :description "List all known Projectile projects."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn projectile-list-projects [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.projectile :as p])
+                  (p/handle-projectile-list-projects {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+;; =============================================================================
+;; Additional Magit Tools
+;; =============================================================================
+
+(def magit-fetch-spec
+  {:name "magit_fetch"
+   :description "Fetch from a remote via Magit."
+   :schema {:type "object"
+            :properties {:remote {:type "string" :description "Remote name (e.g., origin)"}
+                         :directory {:type "string" :description "Repository directory"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn magit-fetch [{:keys [remote directory port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.magit :as m])
+                         (m/handle-magit-fetch {:remote %s :directory %s}))"
+                     (if remote (pr-str remote) "nil")
+                     (if directory (pr-str directory) "nil"))]
+    (emacs-eval code :port port :timeout_ms 60000)))
+
+(def magit-feature-branches-spec
+  {:name "magit_feature_branches"
+   :description "List feature branches in the repository."
+   :schema {:type "object"
+            :properties {:directory {:type "string" :description "Repository directory"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn magit-feature-branches [{:keys [directory port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.magit :as m])
+                         (m/handle-magit-feature-branches {:directory %s}))"
+                     (if directory (pr-str directory) "nil"))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+;; =============================================================================
+;; Swarm Broadcast Tool
+;; =============================================================================
+
+(def swarm-broadcast-spec
+  {:name "swarm_broadcast"
+   :description "Broadcast a prompt to all active swarm slaves."
+   :schema {:type "object"
+            :properties {:prompt {:type "string" :description "Prompt to broadcast"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["prompt"]}})
+
+(defn swarm-broadcast [{:keys [prompt port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.swarm :as s])
+                         (s/handle-swarm-broadcast {:prompt %s}))"
+                     (pr-str prompt))]
+    (emacs-eval code :port port :timeout_ms 60000)))
+
+;; =============================================================================
+;; Org Tools
+;; =============================================================================
+
+(def org-clj-parse-spec
+  {:name "org_clj_parse"
+   :description "Parse an Org file into a Clojure data structure."
+   :schema {:type "object"
+            :properties {:file_path {:type "string" :description "Path to the Org file"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["file_path"]}})
+
+(defn org-clj-parse [{:keys [file_path port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.org :as org])
+                         (org/handle-org-clj-parse {:file_path %s}))"
+                     (pr-str file_path))]
+    (emacs-eval code :port port :timeout_ms 30000)))
+
+(def org-clj-write-spec
+  {:name "org_clj_write"
+   :description "Write a Clojure data structure as an Org file."
+   :schema {:type "object"
+            :properties {:file_path {:type "string" :description "Path to write the Org file"}
+                         :document {:type "object" :description "Org document as Clojure data"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["file_path" "document"]}})
+
+(defn org-clj-write [{:keys [file_path document port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.org :as org])
+                         (org/handle-org-clj-write {:file_path %s :document %s}))"
+                     (pr-str file_path) (pr-str document))]
+    (emacs-eval code :port port :timeout_ms 30000)))
+
+(def org-clj-query-spec
+  {:name "org_clj_query"
+   :description "Query an Org file for specific content."
+   :schema {:type "object"
+            :properties {:file_path {:type "string" :description "Path to the Org file"}
+                         :query_type {:type "string" :description "Type of query (e.g., headline, property, tag)"}
+                         :query_value {:type "string" :description "Value to query for"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["file_path" "query_type" "query_value"]}})
+
+(defn org-clj-query [{:keys [file_path query_type query_value port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.org :as org])
+                         (org/handle-org-clj-query {:file_path %s :query_type %s :query_value %s}))"
+                     (pr-str file_path) (pr-str query_type) (pr-str query_value))]
+    (emacs-eval code :port port :timeout_ms 30000)))
+
+(def org-kanban-render-spec
+  {:name "org_kanban_render"
+   :description "Render an Org file as a kanban board."
+   :schema {:type "object"
+            :properties {:file_path {:type "string" :description "Path to the Org file"}
+                         :format {:type "string" :description "Output format (e.g., text, json)"}
+                         :column_width {:type "integer" :description "Width of each column"}
+                         :max_cards {:type "integer" :description "Maximum cards per column"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["file_path"]}})
+
+(defn org-kanban-render [{:keys [file_path format column_width max_cards port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.org :as org])
+                         (org/handle-org-kanban-render {:file_path %s :format %s :column_width %s :max_cards %s}))"
+                     (pr-str file_path)
+                     (if format (pr-str format) "nil")
+                     (if column_width (str column_width) "nil")
+                     (if max_cards (str max_cards) "nil"))]
+    (emacs-eval code :port port :timeout_ms 30000)))
+
+;; =============================================================================
+;; Prompt Tools
+;; =============================================================================
+
+(def prompt-capture-spec
+  {:name "prompt_capture"
+   :description "Capture a prompt for later reference."
+   :schema {:type "object"
+            :properties {:prompt {:type "string" :description "The prompt text"}
+                         :accomplishes {:type "string" :description "What the prompt accomplishes"}
+                         :category {:type "string" :description "Category for organization"}
+                         :tags {:type "array" :items {:type "string"} :description "Tags for the prompt"}
+                         :quality {:type "string" :description "Quality rating"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["prompt" "accomplishes"]}})
+
+(defn prompt-capture [{:keys [prompt accomplishes category tags quality port]}]
+  (let [tags-str (if (seq tags)
+                   (str "[" (clojure.string/join " " (map pr-str tags)) "]")
+                   "nil")
+        code (format "(do (require '[emacs-mcp.tools.prompt :as pr])
+                         (pr/handle-prompt-capture {:prompt %s :accomplishes %s :category %s :tags %s :quality %s}))"
+                     (pr-str prompt)
+                     (pr-str accomplishes)
+                     (if category (pr-str category) "nil")
+                     tags-str
+                     (if quality (pr-str quality) "nil"))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def prompt-list-spec
+  {:name "prompt_list"
+   :description "List captured prompts, optionally filtered."
+   :schema {:type "object"
+            :properties {:category {:type "string" :description "Filter by category"}
+                         :quality {:type "string" :description "Filter by quality"}
+                         :limit {:type "integer" :description "Maximum prompts to return"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn prompt-list [{:keys [category quality limit port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.prompt :as pr])
+                         (pr/handle-prompt-list {:category %s :quality %s :limit %s}))"
+                     (if category (pr-str category) "nil")
+                     (if quality (pr-str quality) "nil")
+                     (if limit (str limit) "nil"))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def prompt-search-spec
+  {:name "prompt_search"
+   :description "Search captured prompts by query."
+   :schema {:type "object"
+            :properties {:query {:type "string" :description "Search query"}
+                         :limit {:type "integer" :description "Maximum results"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["query"]}})
+
+(defn prompt-search [{:keys [query limit port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.prompt :as pr])
+                         (pr/handle-prompt-search {:query %s :limit %s}))"
+                     (pr-str query)
+                     (if limit (str limit) "nil"))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def prompt-stats-spec
+  {:name "prompt_stats"
+   :description "Get statistics about captured prompts."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn prompt-stats [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.prompt :as pr])
+                  (pr/handle-prompt-stats {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+;; =============================================================================
+;; Additional Buffer Tools (emacs-mcp.tools)
+;; =============================================================================
+
+(def project-root-spec
+  {:name "project_root"
+   :description "Get the root directory of the current project."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn project-root [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools :as tools])
+                  (tools/handle-project-root {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-capabilities-spec
+  {:name "mcp_capabilities"
+   :description "Get the MCP server capabilities and available tools."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn mcp-capabilities [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools :as tools])
+                  (tools/handle-mcp-capabilities {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+;; =============================================================================
+;; Additional Memory Tools (emacs-mcp.tools.memory)
+;; =============================================================================
+
+(def mcp-memory-demote-spec
+  {:name "mcp_memory_demote"
+   :description "Demote a memory entry to shorter duration."
+   :schema {:type "object"
+            :properties {:id {:type "string" :description "Memory entry ID"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["id"]}})
+
+(defn mcp-memory-demote [{:keys [id port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.memory :as m])
+                         (m/handle-mcp-memory-demote {:id %s}))"
+                     (pr-str id))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-memory-cleanup-expired-spec
+  {:name "mcp_memory_cleanup_expired"
+   :description "Clean up expired memory entries."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn mcp-memory-cleanup-expired [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.memory :as m])
+                  (m/handle-mcp-memory-cleanup-expired {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-memory-expiring-soon-spec
+  {:name "mcp_memory_expiring_soon"
+   :description "Get memory entries expiring within the specified number of days."
+   :schema {:type "object"
+            :properties {:days {:type "integer" :description "Number of days to look ahead"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["days"]}})
+
+(defn mcp-memory-expiring-soon [{:keys [days port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.memory :as m])
+                         (m/handle-mcp-memory-expiring-soon {:days %d}))"
+                     days)]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-memory-log-access-spec
+  {:name "mcp_memory_log_access"
+   :description "Log an access event for a memory entry."
+   :schema {:type "object"
+            :properties {:id {:type "string" :description "Memory entry ID"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["id"]}})
+
+(defn mcp-memory-log-access [{:keys [id port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.memory :as m])
+                         (m/handle-mcp-memory-log-access {:id %s}))"
+                     (pr-str id))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-memory-feedback-spec
+  {:name "mcp_memory_feedback"
+   :description "Provide feedback on a memory entry."
+   :schema {:type "object"
+            :properties {:id {:type "string" :description "Memory entry ID"}
+                         :feedback {:type "string" :description "Feedback to record"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["id" "feedback"]}})
+
+(defn mcp-memory-feedback [{:keys [id feedback port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.memory :as m])
+                         (m/handle-mcp-memory-feedback {:id %s :feedback %s}))"
+                     (pr-str id) (pr-str feedback))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-memory-check-duplicate-spec
+  {:name "mcp_memory_check_duplicate"
+   :description "Check if a memory entry with similar content already exists."
+   :schema {:type "object"
+            :properties {:type {:type "string"
+                                :description "Memory type: note, snippet, convention, decision"
+                                :enum ["note" "snippet" "convention" "decision"]}
+                         :content {:type "string" :description "Content to check for duplicates"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["type" "content"]}})
+
+(defn mcp-memory-check-duplicate [{:keys [type content port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.memory :as m])
+                         (m/handle-mcp-memory-check-duplicate {:type %s :content %s}))"
+                     (pr-str type) (pr-str content))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+;; =============================================================================
+;; Additional Kanban Tools (emacs-mcp.tools.kanban)
+;; =============================================================================
+
+(def mcp-kanban-update-task-spec
+  {:name "mcp_kanban_update_task"
+   :description "Update a kanban task's status or title."
+   :schema {:type "object"
+            :properties {:task_id {:type "string" :description "Task ID"}
+                         :status {:type "string" :description "New status: todo, inprogress, done"}
+                         :title {:type "string" :description "New task title"}
+                         :port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required ["task_id"]}})
+
+(defn mcp-kanban-update-task [{:keys [task_id status title port]}]
+  (let [code (format "(do (require '[emacs-mcp.tools.kanban :as k])
+                         (k/handle-mcp-kanban-update-task {:task_id %s :status %s :title %s}))"
+                     (pr-str task_id)
+                     (if status (pr-str status) "nil")
+                     (if title (pr-str title) "nil"))]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-kanban-roadmap-spec
+  {:name "mcp_kanban_roadmap"
+   :description "Get the kanban roadmap view."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn mcp-kanban-roadmap [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.kanban :as k])
+                  (k/handle-mcp-kanban-roadmap {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-kanban-my-tasks-spec
+  {:name "mcp_kanban_my_tasks"
+   :description "Get tasks assigned to the current user."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn mcp-kanban-my-tasks [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.kanban :as k])
+                  (k/handle-mcp-kanban-my-tasks {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
+(def mcp-kanban-sync-spec
+  {:name "mcp_kanban_sync"
+   :description "Sync kanban board with backend."
+   :schema {:type "object"
+            :properties {:port {:type "integer" :description "nREPL port (default: 7910)"}}
+            :required []}})
+
+(defn mcp-kanban-sync [{:keys [port]}]
+  (let [code "(do (require '[emacs-mcp.tools.kanban :as k])
+                  (k/handle-mcp-kanban-sync {}))"]
+    (emacs-eval code :port port :timeout_ms 15000)))
+
 ;; =============================================================================
 ;; All tool specs and handlers
 ;; =============================================================================
@@ -771,6 +1181,8 @@ Use after mcp_memory_query_metadata to fetch specific entries."
    {:spec insert-text-spec :handler insert-text}
    {:spec recent-files-spec :handler recent-files}
    {:spec buffer-info-spec :handler buffer-info}
+   {:spec project-root-spec :handler project-root}
+   {:spec mcp-capabilities-spec :handler mcp-capabilities}
    ;; Magit integration
    {:spec magit-status-spec :handler magit-status}
    {:spec magit-branches-spec :handler magit-branches}
@@ -780,19 +1192,34 @@ Use after mcp_memory_query_metadata to fetch specific entries."
    {:spec magit-commit-spec :handler magit-commit}
    {:spec magit-push-spec :handler magit-push}
    {:spec magit-pull-spec :handler magit-pull}
-   ;; Context & Memory
+   {:spec magit-fetch-spec :handler magit-fetch}
+   {:spec magit-feature-branches-spec :handler magit-feature-branches}
+   ;; Context & Project
    {:spec mcp-get-context-spec :handler mcp-get-context}
+   {:spec project-root-spec :handler project-root}
+   {:spec mcp-capabilities-spec :handler mcp-capabilities}
+   ;; Memory
    {:spec mcp-memory-query-metadata-spec :handler mcp-memory-query-metadata}
    {:spec mcp-memory-get-full-spec :handler mcp-memory-get-full}
    {:spec mcp-memory-add-spec :handler mcp-memory-add}
    {:spec mcp-memory-search-semantic-spec :handler mcp-memory-search-semantic}
    {:spec mcp-memory-set-duration-spec :handler mcp-memory-set-duration}
    {:spec mcp-memory-promote-spec :handler mcp-memory-promote}
+   {:spec mcp-memory-demote-spec :handler mcp-memory-demote}
+   {:spec mcp-memory-cleanup-expired-spec :handler mcp-memory-cleanup-expired}
+   {:spec mcp-memory-expiring-soon-spec :handler mcp-memory-expiring-soon}
+   {:spec mcp-memory-log-access-spec :handler mcp-memory-log-access}
+   {:spec mcp-memory-feedback-spec :handler mcp-memory-feedback}
+   {:spec mcp-memory-check-duplicate-spec :handler mcp-memory-check-duplicate}
    ;; Kanban
    {:spec mcp-kanban-status-spec :handler mcp-kanban-status}
    {:spec mcp-kanban-list-tasks-spec :handler mcp-kanban-list-tasks}
    {:spec mcp-kanban-create-task-spec :handler mcp-kanban-create-task}
    {:spec mcp-kanban-move-task-spec :handler mcp-kanban-move-task}
+   {:spec mcp-kanban-update-task-spec :handler mcp-kanban-update-task}
+   {:spec mcp-kanban-roadmap-spec :handler mcp-kanban-roadmap}
+   {:spec mcp-kanban-my-tasks-spec :handler mcp-kanban-my-tasks}
+   {:spec mcp-kanban-sync-spec :handler mcp-kanban-sync}
    ;; Swarm
    {:spec swarm-status-spec :handler swarm-status}
    {:spec swarm-spawn-spec :handler swarm-spawn}
@@ -800,7 +1227,21 @@ Use after mcp_memory_query_metadata to fetch specific entries."
    {:spec swarm-collect-spec :handler swarm-collect}
    {:spec swarm-list-presets-spec :handler swarm-list-presets}
    {:spec swarm-kill-spec :handler swarm-kill}
+   {:spec swarm-broadcast-spec :handler swarm-broadcast}
    ;; Projectile
    {:spec projectile-info-spec :handler projectile-info}
    {:spec projectile-files-spec :handler projectile-files}
-   {:spec projectile-search-spec :handler projectile-search}])
+   {:spec projectile-search-spec :handler projectile-search}
+   {:spec projectile-find-file-spec :handler projectile-find-file}
+   {:spec projectile-recent-spec :handler projectile-recent}
+   {:spec projectile-list-projects-spec :handler projectile-list-projects}
+   ;; Org
+   {:spec org-clj-parse-spec :handler org-clj-parse}
+   {:spec org-clj-write-spec :handler org-clj-write}
+   {:spec org-clj-query-spec :handler org-clj-query}
+   {:spec org-kanban-render-spec :handler org-kanban-render}
+   ;; Prompt
+   {:spec prompt-capture-spec :handler prompt-capture}
+   {:spec prompt-list-spec :handler prompt-list}
+   {:spec prompt-search-spec :handler prompt-search}
+   {:spec prompt-stats-spec :handler prompt-stats}])
