@@ -129,11 +129,11 @@ Port resolution order:
 1. Explicit port parameter
 2. BB_MCP_NREPL_PORT env var
 3. .nrepl-port file in BB_MCP_PROJECT_DIR
-4. Default: 7888
+4. Default: 7910 (emacs-mcp nREPL)
 
 Examples:
 - clojure_eval(code: \"(+ 1 2)\")
-- clojure_eval(code: \"(require '[my.ns])\", port: 7888)"
+- clojure_eval(code: \"(require '[my.ns])\", port: 7910)"
    :schema {:type "object"
             :properties {:code {:type "string"
                                 :description "Clojure code to evaluate"}
@@ -156,12 +156,13 @@ Examples:
   (or (System/getenv "BB_MCP_PROJECT_DIR") "."))
 
 (defn get-nrepl-port
-  "Get nREPL port from env, .nrepl-port file, or default."
+  "Get nREPL port from env, .nrepl-port file, or default.
+   Default is 7910 for emacs-mcp nREPL."
   []
   (or (when-let [env-port (System/getenv "BB_MCP_NREPL_PORT")]
         (parse-long env-port))
       (find-nrepl-port (get-project-dir))
-      7888))
+      7910))
 
 (defn execute
   "Execute Clojure code via nREPL."
