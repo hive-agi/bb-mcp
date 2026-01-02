@@ -10,7 +10,7 @@
 
 (deftest tool-count-regression-test
   (testing "Total tool count must remain stable"
-    (is (= 79 (count emacs/tools))
+    (is (= 83 (count emacs/tools))
         "Tool count changed - this breaks backwards compatibility")))
 
 (deftest all-tools-have-required-structure-test
@@ -79,7 +79,9 @@
              "mcp_kanban_move_task" "mcp_kanban_update_task" "mcp_kanban_roadmap"
              "mcp_kanban_my_tasks" "mcp_kanban_sync"}
    :swarm #{"swarm_status" "swarm_spawn" "swarm_dispatch" "swarm_collect"
-            "swarm_list_presets" "swarm_kill" "swarm_broadcast"}
+            "swarm_list_presets" "swarm_kill" "swarm_broadcast"
+            "swarm_pending_prompts" "swarm_respond_prompt"
+            "jvm_cleanup" "resource_guard"}
    :projectile #{"projectile_info" "projectile_files" "projectile_search"
                  "projectile_find_file" "projectile_recent" "projectile_list_projects"}
    :org #{"org_clj_parse" "org_clj_write" "org_clj_query" "org_kanban_render"}
@@ -103,14 +105,14 @@
     (is (= 10 (count (:magit expected-tool-categories))) "Magit tools")
     (is (= 12 (count (:memory expected-tool-categories))) "Memory tools")
     (is (= 8 (count (:kanban expected-tool-categories))) "Kanban tools")
-    (is (= 7 (count (:swarm expected-tool-categories))) "Swarm tools")
+    (is (= 11 (count (:swarm expected-tool-categories))) "Swarm tools")
     (is (= 6 (count (:projectile expected-tool-categories))) "Projectile tools")
     (is (= 4 (count (:org expected-tool-categories))) "Org tools")
     (is (= 4 (count (:prompt expected-tool-categories))) "Prompt tools")
     (is (= 8 (count (:cider expected-tool-categories))) "CIDER tools")
     (is (= 1 (count (:context expected-tool-categories))) "Context tools")
-    ;; Total: 19+10+12+8+7+6+4+4+8+1 = 79
-    (is (= 79 (reduce + (map count (vals expected-tool-categories)))))))
+    ;; Total: 19+10+12+8+11+6+4+4+8+1 = 83
+    (is (= 83 (reduce + (map count (vals expected-tool-categories)))))))
 
 ;; =============================================================================
 ;; Unit Tests - Handler Contract
@@ -132,4 +134,3 @@
       (doseq [tool critical-tools]
         (is (contains? tool-names tool)
             (str "Critical tool missing: " tool))))))
-
