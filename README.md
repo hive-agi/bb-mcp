@@ -145,14 +145,19 @@ bb mcp
 bb -m bb-mcp.core
 ```
 
-### Ensure emacs-mcp is Running
+### Connection Management
 
-bb-mcp auto-spawns emacs-mcp if not running. To start manually:
+bb-mcp uses **state-based detection** to manage the emacs-mcp connection:
 
-```bash
-cd ~/path/to/emacs-mcp
-clojure -M:nrepl
-```
+| State | Condition | Action |
+|-------|-----------|--------|
+| `:ready` | Port listening | Connect immediately (0 latency) |
+| `:starting` | Lock file or process exists | Wait with exponential backoff |
+| `:not-running` | No process found | Spawn emacs-mcp and wait |
+
+This eliminates race conditions and ensures reliable startup even when multiple bb-mcp instances start simultaneously.
+
+Logs go to `~/.config/emacs-mcp/server.log`.
 
 ## Project Structure
 
