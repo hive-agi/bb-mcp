@@ -41,7 +41,8 @@
               edn/read-string   ; unwrap outer quotes
               edn/read-string))) ; parse EDN vector
       (catch Exception e
-        (println "[dynamic] Failed to fetch tools:" (ex-message e))
+        (binding [*out* *err*]
+          (println "[dynamic] Failed to fetch tools:" (ex-message e)))
         nil))))
 
 (defn- get-agent-id
@@ -91,18 +92,23 @@
           :schema (or schema {:type "object" :properties {} :required []})}
    :handler (make-forwarding-handler name)})
 
+(defn- log-stderr [& args]
+  "Log to stderr (stdout reserved for JSON-RPC)."
+  (binding [*out* *err*]
+    (apply println args)))
+
 (defn load-dynamic-tools!
   "Fetch tools from hive-mcp and cache them.
    Returns true on success, false on failure."
   [& {:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
-  (println "[dynamic] Loading tools from hive-mcp on port" port)
+  (log-stderr "[dynamic] Loading tools from hive-mcp on port" port)
   (if-let [raw-tools (fetch-emacs-tools-raw {:port port :timeout-ms timeout-ms})]
     (let [tools (mapv transform-tool raw-tools)]
       (reset! tool-cache tools)
-      (println "[dynamic] Loaded" (count tools) "tools from hive-mcp")
+      (log-stderr "[dynamic] Loaded" (count tools) "tools from hive-mcp")
       true)
     (do
-      (println "[dynamic] Failed to load tools, using static fallback")
+      (log-stderr "[dynamic] Failed to load tools, using static fallback")
       false)))
 
 (defn get-tools
