@@ -53,12 +53,13 @@
 (defn- make-forwarding-handler
   "Create a handler that forwards calls to hive-mcp via nREPL.
    Uses the WRAPPED handler from server-context-atom to get piggyback messages.
-   Injects agent_id from CLAUDE_SWARM_SLAVE_ID env var for per-agent cursors."
+   Respects existing agent_id from args (injected by core.clj from env var)."
   [tool-name]
   (fn [args]
     (let [port (or (:port args) 7910)
-          agent-id (get-agent-id)
-          ;; Remove port, inject agent_id for per-agent piggyback cursor
+          ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
+          agent-id (or (:agent_id args) (get-agent-id))
+          ;; Remove port, use resolved agent_id for per-agent piggyback cursor
           emacs-args (-> args
                          (dissoc :port)
                          (assoc :agent_id agent-id))

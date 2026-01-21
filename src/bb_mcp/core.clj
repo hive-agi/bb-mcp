@@ -9,6 +9,21 @@
             [bb-mcp.nrepl-spawn :as spawn]
             [clojure.string :as str]))
 
+;; Agent context injection - auto-add agent_id from env var for attribution
+(defn- get-agent-id
+  "Get agent ID from CLAUDE_SWARM_SLAVE_ID env var, or nil if not set."
+  []
+  (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
+
+(defn- inject-agent-context
+  "Inject agent_id into args if env var is set and not already specified.
+   Only injects if CLAUDE_SWARM_SLAVE_ID is set and args lacks :agent_id."
+  [args]
+  (let [agent-id (get-agent-id)]
+    (if (and agent-id (not (:agent_id args)))
+      (assoc args :agent_id agent-id)
+      args)))
+
 ;; Native bb-mcp tools (no JVM needed)
 (def ^:private native-tools
   [{:spec bash/tool-spec
@@ -45,10 +60,12 @@
   (proto/tools-list-response id (map :spec (get-tools))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
-  (let [{:keys [name arguments]} params]
+  (let [{:keys [name arguments]} params
+        ;; Auto-inject agent_id from CLAUDE_SWARM_SLAVE_ID env var
+        enriched-args (inject-agent-context arguments)]
     (if-let [tool (find-tool name)]
       (try
-        (let [{:keys [result error?]} ((:handler tool) arguments)]
+        (let [{:keys [result error?]} ((:handler tool) enriched-args)]
           (proto/tool-call-response id result error?))
         (catch Exception e
           (proto/tool-call-response id (str "Error: " (ex-message e)) true)))
