@@ -170,7 +170,7 @@
   "Evaluate Clojure code on a remote nREPL server."
   [{:keys [port host code timeout-ms]}]
   (let [host (or host "localhost")
-        timeout (or timeout-ms 30000)]
+        timeout (or timeout-ms 600000)]
     (try
       (with-open [socket (doto (Socket. ^String host ^int port)
                            (.setSoTimeout timeout))
@@ -220,7 +220,7 @@ Examples:
                          :port {:type "integer"
                                 :description "nREPL port (auto-discovered if not specified)"}
                          :timeout_ms {:type "integer"
-                                      :description "Timeout in ms (default: 30000)"}}
+                                      :description "Timeout in ms (default: 600000 / 10 min). Long-running tools like wave dispatch may take several minutes."}}
             :required ["code"]}})
 
 (defn find-nrepl-port
@@ -250,4 +250,4 @@ Examples:
   (let [port (or port (get-nrepl-port))]
     (eval-code {:port port
                 :code code
-                :timeout-ms (or timeout_ms 30000)})))
+                :timeout-ms (or timeout_ms 600000)})))

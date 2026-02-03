@@ -29,7 +29,8 @@
                           {:name (:name t)
                            :description (:description t)
                            :schema (:inputSchema t)})
-                        tools/tools)))"]
+                        ;; Only consolidated tools (roots), not flat module tools
+                        (tools/get-consolidated-tools))))"]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code
@@ -44,6 +45,25 @@
         (binding [*out* *err*]
           (println "[dynamic] Failed to fetch tools:" (ex-message e)))
         nil))))
+
+(def ^:private long-running-tool-patterns
+  "Tool name patterns that require extended timeouts.
+   Wave dispatch, validated wave, and delegate operations can run for minutes
+   as they orchestrate multiple drone executions via OpenRouter."
+  #{"dispatch_drone_wave" "dispatch_validated_wave" "delegate"
+    "delegate_drone" "swarm_dispatch"})
+
+(defn- tool-timeout-ms
+  "Determine appropriate timeout for a tool based on its name.
+   Long-running tools (waves, delegation) get 10 minutes.
+   Other tools use the caller-specified timeout or the global default.
+
+   CLARITY-I: Inputs are guarded — match timeout to expected execution time."
+  [tool-name explicit-timeout-ms]
+  (or explicit-timeout-ms
+      (when (contains? long-running-tool-patterns tool-name)
+        600000)
+      600000))
 
 (defn- get-agent-id
   "Get agent ID from env var (set by swarm) or default to 'coordinator'."
@@ -76,8 +96,13 @@
                          (get-in result [:content 0 :text])))")]
       (let [resp (nrepl/eval-code {:port port
                                    :code code
-                                   :timeout-ms (or (:timeout_ms args) 30000)})
-            parsed (try (edn/read-string (:result resp)) (catch Exception _ (:result resp)))]
+                                   :timeout-ms (tool-timeout-ms tool-name (:timeout_ms args))})
+            ;; CLARITY-Y: Don't parse error responses through edn/read-string.
+            ;; Error strings like "nREPL connection failed: Read timed out" get
+            ;; corrupted by edn parsing into bare symbols like "nREPL".
+            parsed (if (:error? resp)
+                     (:result resp)
+                     (try (edn/read-string (:result resp)) (catch Exception _ (:result resp))))]
         (binding [*out* *err*]
           (println "[dynamic] has-markers:" (clojure.string/includes? (str parsed) "HIVEMIND")))
         {:result parsed
