@@ -85,15 +85,10 @@
                          (assoc :agent_id agent-id))
           ;; Call through server's wrapped handler (not raw tools/tools handler)
           ;; This ensures make-tool wrapper runs and piggyback is attached
-          code (str "(do
-                       (require '[hive-mcp.server :as server])
-                       (let [server-ns (find-ns 'hive-mcp.server)
-                             atom-var (ns-resolve server-ns 'server-context-atom)
-                             context @(deref atom-var)
-                             handler (get-in @(:tools context) [\"" tool-name "\" :handler])
-                             result (handler " (pr-str emacs-args) ")]
-                         ;; Return the content text with any piggyback embedded
-                         (get-in result [:content 0 :text])))")]
+          code (str "(let [ctx @(deref (resolve 'hive-mcp.server.core/server-context-atom))
+                           handler (get-in @(:tools ctx) [\"" tool-name "\" :handler])
+                           result (handler " (pr-str emacs-args) ")]
+                       (get-in result [:content 0 :text]))")]
       (let [resp (nrepl/eval-code {:port port
                                    :code code
                                    :timeout-ms (tool-timeout-ms tool-name (:timeout_ms args))})
