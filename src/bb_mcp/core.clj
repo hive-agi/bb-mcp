@@ -5,7 +5,7 @@
             [bb-mcp.tools.file :as file]
             [bb-mcp.tools.grep :as grep]
             [bb-mcp.tools.nrepl :as nrepl]
-            [bb-mcp.tools.emacs :as emacs]
+            [bb-mcp.tools.hive :as hive]
             [bb-mcp.nrepl-spawn :as spawn]
             [clojure.string :as str]))
 
@@ -48,9 +48,9 @@
     :handler nrepl/execute}])
 
 (defn get-tools
-  "Get all registered tools: native + emacs (dynamic or static fallback)."
+  "Get all registered tools: native + hive-mcp (dynamic)."
   []
-  (concat native-tools (emacs/get-tools)))
+  (concat native-tools (hive/get-tools)))
 
 (defn find-tool [name]
   (first (filter #(= name (get-in % [:spec :name])) (get-tools))))
@@ -102,7 +102,7 @@
   ;; Ensure hive-mcp nREPL is running (auto-spawn if needed)
   (spawn/ensure-nrepl!)
   ;; Load tools dynamically from hive-mcp (falls back to static on failure)
-  (emacs/init!)
+  (hive/init!)
   (run-server))
 
 ;; For REPL development

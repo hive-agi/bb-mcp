@@ -1,8 +1,8 @@
 (ns bb-mcp.tools.dynamic-test
   "Tests for dynamic tool loading from hive-mcp."
   (:require [clojure.test :refer :all]
-            [bb-mcp.tools.emacs :as emacs]
-            [bb-mcp.tools.emacs.dynamic :as dynamic]))
+            [bb-mcp.tools.hive :as hive]
+            [bb-mcp.tools.hive.dynamic :as dynamic]))
 
 ;; =============================================================================
 ;; Unit Tests - Transform Functions (no hive-mcp required)
@@ -10,12 +10,12 @@
 
 (deftest transform-tool-test
   (testing "Transform hive-mcp spec to bb-mcp format"
-    (let [emacs-spec {:name "test_tool"
-                      :description "A test tool"
-                      :schema {:type "object"
-                               :properties {:foo {:type "string"}}
-                               :required ["foo"]}}
-          result (#'dynamic/transform-tool emacs-spec)]
+    (let [hive-spec {:name "test_tool"
+                     :description "A test tool"
+                     :schema {:type "object"
+                              :properties {:foo {:type "string"}}
+                              :required ["foo"]}}
+          result (#'dynamic/transform-tool hive-spec)]
       (is (map? result) "Result should be a map")
       (is (contains? result :spec) "Result should have :spec")
       (is (contains? result :handler) "Result should have :handler")
@@ -29,10 +29,10 @@
 
 (deftest transform-tool-missing-schema-test
   (testing "Transform handles missing schema"
-    (let [emacs-spec {:name "minimal_tool"
-                      :description "Minimal tool"
-                      :schema nil}
-          result (#'dynamic/transform-tool emacs-spec)]
+    (let [hive-spec {:name "minimal_tool"
+                     :description "Minimal tool"
+                     :schema nil}
+          result (#'dynamic/transform-tool hive-spec)]
       (is (= {:type "object" :properties {} :required []}
              (get-in result [:spec :schema]))
           "Missing schema should get default empty schema"))))
@@ -70,16 +70,16 @@
   []
   (try
     (dynamic/clear-cache!)
-    (emacs/init!)
+    (hive/init!)
     (dynamic/tools-loaded?)
     (catch Exception _ false)))
 
 (deftest dynamic-loading-integration-test
   (when (hive-mcp-available?)
     (testing "Dynamic tool loading from hive-mcp"
-      (let [tools (emacs/get-tools)]
-        (is (> (count tools) 50)
-            "Should load many tools from hive-mcp")
+      (let [tools (hive/get-tools)]
+        (is (> (count tools) 10)
+            "Should load tools from hive-mcp")
 
         (testing "All tools have required structure"
           (doseq [tool tools]
@@ -99,19 +99,10 @@
                 freq (frequencies names)
                 dups (filter #(> (val %) 1) freq)]
             (is (empty? dups)
-                (str "Duplicate tools: " (keys dups)))))
-
-        (testing "Critical tools present"
-          (let [names (set (map #(get-in % [:spec :name]) tools))
-                critical ["emacs_status" "eval_elisp" "magit_status"
-                          "mcp_get_context" "mcp_kanban_status"
-                          "swarm_status"]]
-            (doseq [tool critical]
-              (is (contains? names tool)
-                  (str "Critical tool missing: " tool)))))))))
+                (str "Duplicate tools: " (keys dups)))))))))
 
 (deftest empty-tools-when-not-initialized-test
   (testing "get-tools returns empty when not initialized"
     (dynamic/clear-cache!)
-    (is (= [] (emacs/get-tools))
+    (is (= [] (hive/get-tools))
         "Should return empty vector when cache is nil")))

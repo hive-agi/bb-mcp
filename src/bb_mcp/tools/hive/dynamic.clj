@@ -1,4 +1,4 @@
-(ns bb-mcp.tools.emacs.dynamic
+(ns bb-mcp.tools.hive.dynamic
   "Dynamic tool loading from hive-mcp.
 
    This module fetches tool specs from hive-mcp at startup and creates
@@ -15,7 +15,7 @@
 
 (defonce ^:private tool-cache (atom nil))
 
-(defn- fetch-emacs-tools-raw
+(defn- fetch-hive-tools-raw
   "Query hive-mcp for all tool specs via nREPL.
    Returns raw tool data or nil on failure.
 
@@ -80,14 +80,14 @@
           ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
           agent-id (or (:agent_id args) (get-agent-id))
           ;; Remove port, use resolved agent_id for per-agent piggyback cursor
-          emacs-args (-> args
-                         (dissoc :port)
-                         (assoc :agent_id agent-id))
+          hive-args (-> args
+                        (dissoc :port)
+                        (assoc :agent_id agent-id))
           ;; Call through server's wrapped handler (not raw tools/tools handler)
           ;; This ensures make-tool wrapper runs and piggyback is attached
           code (str "(let [ctx @(deref (resolve 'hive-mcp.server.core/server-context-atom))
                            handler (get-in @(:tools ctx) [\"" tool-name "\" :handler])
-                           result (handler " (pr-str emacs-args) ")]
+                           result (handler " (pr-str hive-args) ")]
                        (get-in result [:content 0 :text]))")]
       (let [resp (nrepl/eval-code {:port port
                                    :code code
@@ -123,7 +123,7 @@
    Returns true on success, false on failure."
   [& {:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
   (log-stderr "[dynamic] Loading tools from hive-mcp on port" port)
-  (if-let [raw-tools (fetch-emacs-tools-raw {:port port :timeout-ms timeout-ms})]
+  (if-let [raw-tools (fetch-hive-tools-raw {:port port :timeout-ms timeout-ms})]
     (let [tools (mapv transform-tool raw-tools)]
       (reset! tool-cache tools)
       (log-stderr "[dynamic] Loaded" (count tools) "tools from hive-mcp")
