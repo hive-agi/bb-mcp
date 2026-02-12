@@ -23,14 +23,14 @@
    We extract just the spec fields (not handler)."
   [{:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
   (let [code "(do
-                (require '[hive-mcp.tools :as tools])
+                (require '[hive-mcp.tools.registry :as reg])
                 (pr-str
                   (mapv (fn [t]
                           {:name (:name t)
                            :description (:description t)
                            :schema (:inputSchema t)})
                         ;; Only consolidated tools (roots), not flat module tools
-                        (tools/get-consolidated-tools))))"]
+                        (reg/get-consolidated-tools))))"]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code

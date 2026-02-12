@@ -16,12 +16,20 @@
   (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
 
 (defn- inject-agent-context
-  "Inject agent_id into args if env var is set and not already specified.
-   Only injects if CLAUDE_SWARM_SLAVE_ID is set and args lacks :agent_id."
+  "Inject agent context from CLAUDE_SWARM_SLAVE_ID env var.
+
+   Injects TWO fields:
+   - _caller_id: ALWAYS injected — identifies the MCP session/caller.
+     Used by piggyback middleware for per-caller cursor isolation.
+     Never conflicts with user-specified agent_id (dispatch target).
+   - agent_id: only injected when args lack it (backward compat).
+     For dispatch-type tools, user sets agent_id to the target,
+     so bb-mcp must NOT overwrite it."
   [args]
   (let [agent-id (get-agent-id)]
-    (if (and agent-id (not (:agent_id args)))
-      (assoc args :agent_id agent-id)
+    (if agent-id
+      (cond-> (assoc args :_caller_id agent-id)
+        (not (:agent_id args)) (assoc :agent_id agent-id))
       args)))
 
 ;; Native bb-mcp tools (no JVM needed)

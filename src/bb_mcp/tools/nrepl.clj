@@ -182,17 +182,22 @@
           (.flush out))
 
         ;; Read responses until "done" status
-        (loop [results {:value nil :out "" :err ""}]
+        ;; NOTE: :value uses (update str) not (assoc) because nREPL's print
+        ;; middleware (CIDER) chunks large :value responses at buffer-size
+        ;; (default 1024 bytes). Using assoc keeps only the LAST chunk,
+        ;; truncating tool responses and piggyback ---HIVEMIND--- blocks.
+        (loop [results {:value "" :out "" :err ""}]
           (if-let [response (bdecode-from-stream in)]
             (let [status (get response :status [])]
               (if (some #(= % "done") status)
                 (if (:ex response)
                   {:result (str "Error: " (:err results) "\n" (:value response))
                    :error? true}
-                  {:result (or (:value results) (:out results) "nil")
+                  {:result (let [v (:value results)]
+                             (if (seq v) v (or (:out results) "nil")))
                    :error? false})
                 (recur (cond-> results
-                         (:value response) (assoc :value (:value response))
+                         (:value response) (update :value str (:value response))
                          (:out response) (update :out str (:out response))
                          (:err response) (update :err str (:err response))))))
             {:result "No response from nREPL"
