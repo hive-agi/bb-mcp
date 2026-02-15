@@ -22,15 +22,18 @@
    hive-mcp tools are flat: {:name, :description, :inputSchema, :handler}
    We extract just the spec fields (not handler)."
   [{:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
-  (let [code "(do
-                (require '[hive-mcp.tools.registry :as reg])
-                (pr-str
+  (let [code (pr-str
+              '(do
+                 (require '[hive-mcp.tools.registry :as reg])
+                 (require '[hive-mcp.extensions.registry :as ext])
+                 (pr-str
                   (mapv (fn [t]
                           {:name (:name t)
                            :description (:description t)
                            :schema (:inputSchema t)})
-                        ;; Only consolidated tools (roots), not flat module tools
-                        (reg/get-consolidated-tools))))"]
+                        ;; Consolidated tools (supertools) + addon/extension tools
+                        (concat (reg/get-consolidated-tools)
+                                (ext/get-registered-tools))))))]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code
@@ -85,10 +88,11 @@
                         (assoc :agent_id agent-id))
           ;; Call through server's wrapped handler (not raw tools/tools handler)
           ;; This ensures make-tool wrapper runs and piggyback is attached
-          code (str "(let [ctx @(deref (resolve 'hive-mcp.server.core/server-context-atom))
-                           handler (get-in @(:tools ctx) [\"" tool-name "\" :handler])
-                           result (handler " (pr-str hive-args) ")]
-                       (get-in result [:content 0 :text]))")]
+          code (pr-str
+                `(let [ctx# @(deref (resolve '~'hive-mcp.server.core/server-context-atom))
+                       handler# (get-in @(:tools ctx#) [~tool-name :handler])
+                       result# (handler# ~hive-args)]
+                   (get-in result# [:content 0 :text])))]
       (let [resp (nrepl/eval-code {:port port
                                    :code code
                                    :timeout-ms (tool-timeout-ms tool-name (:timeout_ms args))})

@@ -2,8 +2,6 @@
   "Main entry point for bb-mcp - lightweight MCP server in babashka."
   (:require [bb-mcp.protocol :as proto]
             [bb-mcp.tools.bash :as bash]
-            [bb-mcp.tools.file :as file]
-            [bb-mcp.tools.grep :as grep]
             [bb-mcp.tools.nrepl :as nrepl]
             [bb-mcp.tools.hive :as hive]
             [bb-mcp.nrepl-spawn :as spawn]
@@ -32,18 +30,12 @@
         (not (:agent_id args)) (assoc :agent_id agent-id))
       args)))
 
-;; Native bb-mcp tools (no JVM needed)
+;; Native bb-mcp tools (bootstrapping essentials only)
+;; File tools (read_file, file_write, glob_files, grep) are now loaded
+;; dynamically from basic-tools-mcp IAddon via hive-mcp.
 (def ^:private native-tools
   [{:spec bash/tool-spec
     :handler (fn [args] (bash/format-result (bash/execute args)))}
-   {:spec file/read-file-spec
-    :handler file/read-file}
-   {:spec file/write-file-spec
-    :handler file/write-file}
-   {:spec file/glob-spec
-    :handler file/glob-files}
-   {:spec grep/tool-spec
-    :handler grep/execute}
    {:spec nrepl/tool-spec
     :handler nrepl/execute}])
 
