@@ -1,0 +1,5 @@
+{:project-id "bb-mcp"
+ :parent "hive"
+ :description "Babashka MCP server implementation"
+ :language :clojure
+ :tags ["babashka" "mcp"]}

@@ -8,6 +8,12 @@
             [clojure.string :as str]))
 
 ;; Agent context injection - auto-add agent_id from env var for attribution
+
+(def ^:private instance-id
+  "Unique ID for this bb-mcp process. Ensures piggyback cursors
+   are per-instance, preventing multiple coordinators from sharing cursors."
+  (subs (str (java.util.UUID/randomUUID)) 0 8))
+
 (defn- get-agent-id
   "Get agent ID from CLAUDE_SWARM_SLAVE_ID env var, or nil if not set."
   []
@@ -19,16 +25,18 @@
    Injects TWO fields:
    - _caller_id: ALWAYS injected — identifies the MCP session/caller.
      Used by piggyback middleware for per-caller cursor isolation.
+     Appends instance-id for per-process isolation so multiple
+     coordinators don't share cursors.
      Never conflicts with user-specified agent_id (dispatch target).
    - agent_id: only injected when args lack it (backward compat).
      For dispatch-type tools, user sets agent_id to the target,
      so bb-mcp must NOT overwrite it."
   [args]
-  (let [agent-id (get-agent-id)]
-    (if agent-id
-      (cond-> (assoc args :_caller_id agent-id)
-        (not (:agent_id args)) (assoc :agent_id agent-id))
-      args)))
+  (let [agent-id (get-agent-id)
+        caller-id (str (or agent-id "coordinator") ":" instance-id)]
+    (cond-> (assoc args :_caller_id caller-id)
+      (and agent-id (not (:agent_id args)))
+      (assoc :agent_id agent-id))))
 
 ;; Native bb-mcp tools (bootstrapping essentials only)
 ;; File tools (read_file, file_write, glob_files, grep) are now loaded
