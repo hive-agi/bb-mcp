@@ -10,24 +10,44 @@
 ;; Agent context injection - auto-add agent_id from env var for attribution
 
 (def ^:private instance-id
-  "Unique ID for this bb-mcp process. Ensures piggyback cursors
-   are per-instance, preventing multiple coordinators from sharing cursors."
-  (subs (str (java.util.UUID/randomUUID)) 0 8))
+  "Stable ID for this bb-mcp session. Uses parent PID (Claude Code process)
+   so the identity survives bb-mcp restarts within the same session.
+   Falls back to own PID, then random UUID.
+
+   Why PPID: Each Claude Code window spawns bb-mcp as a child process.
+   The parent PID is stable for the session lifetime. When bb-mcp restarts
+   (e.g., tool refresh), the PPID stays the same, so cursor positions
+   are preserved instead of re-reading from timestamp 0."
+  (let [ppid (try
+               (let [parent (.parent (java.lang.ProcessHandle/current))]
+                 (when (.isPresent parent)
+                   (str (.pid (.get parent)))))
+               (catch Exception _ nil))
+        pid  (try (str (.pid (java.lang.ProcessHandle/current)))
+                  (catch Exception _ nil))]
+    (or ppid pid (subs (str (java.util.UUID/randomUUID)) 0 8))))
 
 (defn- get-agent-id
   "Get agent ID from CLAUDE_SWARM_SLAVE_ID env var, or nil if not set."
   []
   (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
 
+(def ^:private caller-cwd
+  "Working directory of the bb-mcp process (Claude Code session cwd).
+   Injected into args so hive-mcp resolves the correct project-id
+   instead of falling back to its own JVM's user.dir."
+  (System/getProperty "user.dir"))
+
 (defn- inject-agent-context
   "Inject agent context from CLAUDE_SWARM_SLAVE_ID env var.
 
-   Injects TWO fields:
+   Injects THREE fields:
    - _caller_id: ALWAYS injected — identifies the MCP session/caller.
-     Used by piggyback middleware for per-caller cursor isolation.
-     Appends instance-id for per-process isolation so multiple
-     coordinators don't share cursors.
+     Uses instance-id (PPID-based) for per-session cursor isolation.
      Never conflicts with user-specified agent_id (dispatch target).
+   - _caller_cwd: ALWAYS injected — bb-mcp's working directory.
+     Ensures hive-mcp resolves project-id from the caller's cwd,
+     not from the JVM's user.dir (which differs in multiplexer setup).
    - agent_id: only injected when args lack it (backward compat).
      For dispatch-type tools, user sets agent_id to the target,
      so bb-mcp must NOT overwrite it."
@@ -35,6 +55,10 @@
   (let [agent-id (get-agent-id)
         caller-id (str (or agent-id "coordinator") ":" instance-id)]
     (cond-> (assoc args :_caller_id caller-id)
+      ;; Inject cwd when args don't already have a directory
+      (not (:directory args))
+      (assoc :_caller_cwd caller-cwd)
+      ;; Inject agent_id from env var when not already set
       (and agent-id (not (:agent_id args)))
       (assoc :agent_id agent-id))))
 
