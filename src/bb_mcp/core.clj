@@ -33,10 +33,12 @@
   (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
 
 (def ^:private caller-cwd
-  "Working directory of the bb-mcp process (Claude Code session cwd).
-   Injected into args so hive-mcp resolves the correct project-id
-   instead of falling back to its own JVM's user.dir."
-  (System/getProperty "user.dir"))
+  "Working directory of the Claude Code session (the project being worked on).
+   Prefers BB_MCP_PROJECT_DIR (set by start-bb-mcp.sh from the caller's cwd)
+   over user.dir, which is always bb-mcp's own script directory after the
+   'cd $SCRIPT_DIR' in start-bb-mcp.sh."
+  (or (System/getenv "BB_MCP_PROJECT_DIR")
+      (System/getProperty "user.dir")))
 
 (defn- inject-agent-context
   "Inject agent context from CLAUDE_SWARM_SLAVE_ID env var.
