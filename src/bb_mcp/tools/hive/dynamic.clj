@@ -79,21 +79,41 @@
    Respects existing agent_id from args (injected by core.clj from env var)."
   [tool-name]
   (fn [args]
-    (let [port (or (:port args) 7910)
+    (let [;; nREPL port is always hive-mcp's port, never from tool args.
+          ;; Tool args :port belongs to the handler (e.g., CIDER connect target port).
+          nrepl-port 7910
           ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
           agent-id (or (:agent_id args) (get-agent-id))
-          ;; Remove port, use resolved agent_id for per-agent piggyback cursor
+          ;; Keep all args intact, only resolve agent_id for per-agent piggyback cursor
           hive-args (-> args
-                        (dissoc :port)
                         (assoc :agent_id agent-id))
           ;; Call through server's wrapped handler (not raw tools/tools handler)
-          ;; This ensures make-tool wrapper runs and piggyback is attached
+          ;; This ensures make-tool wrapper runs and piggyback is attached.
+          ;;
+          ;; Result extraction handles THREE response formats:
+          ;; 1. Wrapped: {:content [{:type "text" :text "..."}]} — from make-tool middleware
+          ;; 2. Raw map: {:type "text" :text "..."} — from error responses
+          ;; 3. Raw vector: [{:type "text" :text "..."} ...] — from handlers without middleware
+          ;; All text blocks are concatenated to preserve multi-block responses (e.g. catchup).
           code (pr-str
                 `(let [ctx# @(deref (resolve '~'hive-mcp.server.core/server-context-atom))
                        handler# (get-in @(:tools ctx#) [~tool-name :handler])
-                       result# (handler# ~hive-args)]
-                   (get-in result# [:content 0 :text])))]
-      (let [resp (nrepl/eval-code {:port port
+                       result# (handler# ~hive-args)
+                       texts# (cond
+                                ;; Wrapped format: {:content [{:type "text" :text "..."}]}
+                                (and (map? result#) (:content result#))
+                                (mapv :text (:content result#))
+                                ;; Raw vector: [{:type "text" :text "..."} ...]
+                                (sequential? result#)
+                                (mapv :text result#)
+                                ;; Single map: {:type "text" :text "..."}
+                                (map? result#)
+                                [(:text result#)]
+                                ;; Fallback
+                                :else
+                                [(pr-str result#)])]
+                   (clojure.string/join "\n\n" (remove nil? texts#))))]
+      (let [resp (nrepl/eval-code {:port nrepl-port
                                    :code code
                                    :timeout-ms (tool-timeout-ms tool-name (:timeout_ms args))})
             ;; CLARITY-Y: Don't parse error responses through edn/read-string.
