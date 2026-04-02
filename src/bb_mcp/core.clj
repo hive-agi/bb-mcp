@@ -5,7 +5,30 @@
             [bb-mcp.tools.nrepl :as nrepl]
             [bb-mcp.tools.hive :as hive]
             [bb-mcp.nrepl-spawn :as spawn]
+            [cheshire.core :as json]
             [clojure.string :as str]))
+
+;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
+(def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
+
+(defn- log-tool-call
+  "Append tool call request + response to log file for debugging."
+  [tool-name args response elapsed-ms]
+  (try
+    (let [response-text (get-in response [:result :content 0 :text])
+          is-error? (get-in response [:result :isError])
+          truncated (when response-text
+                      (if (> (count response-text) 2000)
+                        (str (subs response-text 0 2000) "\n... [truncated, " (count response-text) " chars total]")
+                        response-text))
+          entry (str "─── " (java.time.LocalDateTime/now) " ───\n"
+                     "TOOL: " tool-name
+                     (when is-error? " [ERROR]")
+                     " (" elapsed-ms "ms)\n"
+                     "ARGS: " (json/generate-string args {:pretty false}) "\n"
+                     "RESP: " (or truncated "<nil>") "\n\n")]
+      (spit log-file entry :append true))
+    (catch Exception _ nil)))
 
 ;; Agent context injection - auto-add agent_id from env var for attribution
 
@@ -95,14 +118,18 @@
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
   (let [{:keys [name arguments]} params
-        ;; Auto-inject agent_id from CLAUDE_SWARM_SLAVE_ID env var
-        enriched-args (inject-agent-context arguments)]
+        enriched-args (inject-agent-context arguments)
+        t0 (System/currentTimeMillis)]
     (if-let [tool (find-tool name)]
       (try
-        (let [{:keys [result error?]} ((:handler tool) enriched-args)]
-          (proto/tool-call-response id result error?))
+        (let [{:keys [result error?]} ((:handler tool) enriched-args)
+              response (proto/tool-call-response id result error?)]
+          (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
+          response)
         (catch Exception e
-          (proto/tool-call-response id (str "Error: " (ex-message e)) true)))
+          (let [response (proto/tool-call-response id (str "Error: " (ex-message e)) true)]
+            (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
+            response)))
       (proto/json-rpc-error id -32601 (str "Unknown tool: " name)))))
 
 (defmethod handle-method "resources/list" [{:keys [id]}]
