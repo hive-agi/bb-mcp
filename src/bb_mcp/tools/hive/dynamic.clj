@@ -15,6 +15,46 @@
 
 (defonce ^:private tool-cache (atom nil))
 
+(def ^:private valid-key-re #"^[a-zA-Z0-9_.-]{1,64}$")
+
+(defn- sanitize-key
+  "Replace chars that violate Anthropic's property-key regex with '_'.
+   Truncate to 64. Ensures the result matches ^[a-zA-Z0-9_.-]{1,64}$."
+  [k]
+  (let [s (name k)
+        cleaned (clojure.string/replace s #"[^a-zA-Z0-9_.-]" "_")
+        truncated (subs cleaned 0 (min 64 (count cleaned)))]
+    (if (re-matches valid-key-re truncated) truncated "_")))
+
+(defn- build-key-rename
+  "Return {sanitized-string -> original-keyword} for property keys that
+   need renaming. Keys already valid are omitted."
+  [properties]
+  (into {}
+        (keep (fn [[k _]]
+                (let [n (name k)]
+                  (when-not (re-matches valid-key-re n)
+                    [(sanitize-key k) (keyword n)]))))
+        properties))
+
+(defn- sanitize-schema
+  "Rewrite schema so all top-level property keys are API-valid.
+   Returns [schema' rename-map] where rename-map is sanitized->original."
+  [schema]
+  (let [props (:properties schema)
+        rename (build-key-rename props)]
+    (if (empty? rename)
+      [schema {}]
+      (let [reverse-rename (into {} (map (fn [[san orig]] [(keyword (name orig)) san]) rename))
+            props' (into {} (map (fn [[k v]]
+                                   [(keyword (get reverse-rename (keyword (name k)) (name k))) v])
+                                 props))
+            req' (some->> (:required schema)
+                          (mapv #(get reverse-rename (keyword (name %)) (name %))))]
+        [(cond-> (assoc schema :properties props')
+           req' (assoc :required req'))
+         rename]))))
+
 (defn- fetch-hive-tools-raw
   "Query hive-mcp for all tool specs via nREPL.
    Returns raw tool data or nil on failure.
@@ -77,16 +117,33 @@
   "Create a handler that forwards calls to hive-mcp via nREPL.
    Uses the WRAPPED handler from server-context-atom to get piggyback messages.
    Respects existing agent_id from args (injected by core.clj from env var)."
-  [tool-name]
+  [tool-name key-rename]
   (fn [args]
-    (let [;; nREPL port is always hive-mcp's port, never from tool args.
+    (let [;; Reverse-rename sanitized property keys back to originals hive-mcp expects.
+          args (if (empty? key-rename)
+                 args
+                 (reduce-kv (fn [m san orig-kw]
+                              (let [san-kw (keyword san)]
+                                (if (contains? m san-kw)
+                                  (-> m (dissoc san-kw) (assoc orig-kw (get m san-kw)))
+                                  m)))
+                            args
+                            key-rename))
+          ;; nREPL port is always hive-mcp's port, never from tool args.
           ;; Tool args :port belongs to the handler (e.g., CIDER connect target port).
           nrepl-port 7910
           ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
           agent-id (or (:agent_id args) (get-agent-id))
+          ;; Inject bb-mcp's own cwd as _caller_cwd so hive-mcp can resolve the
+          ;; caller's project scope. bb-mcp runs per-session, so its user.dir IS
+          ;; the user's actual cwd. Without this, hive-mcp's shared JVM falls
+          ;; back to its own user.dir and scope silently degrades to "global".
+          ;; Only injects when caller did not already supply one (e.g. via SDK).
+          caller-cwd (or (:_caller_cwd args) (System/getProperty "user.dir"))
           ;; Keep all args intact, only resolve agent_id for per-agent piggyback cursor
           hive-args (-> args
-                        (assoc :agent_id agent-id))
+                        (assoc :agent_id agent-id)
+                        (assoc :_caller_cwd caller-cwd))
           ;; Call through server's wrapped handler (not raw tools/tools handler)
           ;; This ensures make-tool wrapper runs and piggyback is attached.
           ;;
@@ -132,10 +189,15 @@
    hive-mcp: {:name, :description, :schema}
    bb-mcp: {:spec {:name, :description, :schema}, :handler fn}"
   [{:keys [name description schema]}]
-  {:spec {:name name
-          :description description
-          :schema (or schema {:type "object" :properties {} :required []})}
-   :handler (make-forwarding-handler name)})
+  (let [base-schema (or schema {:type "object" :properties {} :required []})
+        [schema' rename] (sanitize-schema base-schema)]
+    (when (seq rename)
+      (binding [*out* *err*]
+        (println "[dynamic] sanitized property keys for" name "->" rename)))
+    {:spec {:name name
+            :description description
+            :schema schema'}
+     :handler (make-forwarding-handler name rename)}))
 
 (defn- log-stderr [& args]
   "Log to stderr (stdout reserved for JSON-RPC)."

@@ -23,13 +23,22 @@ Note: Non-zero exit codes are NOT treated as errors."
             :required ["command"]}})
 
 (defn execute
-  "Execute a bash command and return the result."
-  [{:keys [command working_directory timeout_ms]}]
+  "Execute a bash command and return the result.
+
+   Working directory resolution (CLARITY-I guarded input):
+   1. Explicit :working_directory arg (caller override)
+   2. :_caller_cwd (injected by inject-agent-context in core.clj — carries
+      bb-mcp's per-session cwd so `pwd` matches user's actual session cwd,
+      not the bb-mcp process's cwd which is always bb-mcp/ after
+      start-bb-mcp.sh cd's into $SCRIPT_DIR)
+   3. Process cwd (bb-mcp/) — last-resort fallback"
+  [{:keys [command working_directory timeout_ms _caller_cwd]}]
   (let [timeout (or timeout_ms 180000)
+        effective-dir (or working_directory _caller_cwd)
         opts (cond-> {:out :string
                       :err :string
                       :timeout timeout}
-               working_directory (assoc :dir working_directory))]
+               effective-dir (assoc :dir effective-dir))]
     (try
       (let [result (p/shell opts "bash" "-c" command)]
         {:exit-code (:exit result)
