@@ -14,6 +14,11 @@ set -euo pipefail
 # Get the directory where this script lives (bb-mcp root)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Caller's invocation cwd (the Claude session's pwd) — captured BEFORE the
+# explicit project-dir arg and the cd below erase it. Drives HCR scope
+# resolution (kanban/memory default to this dir's .hive-project.edn).
+export BB_MCP_CALLER_CWD="${BB_MCP_CALLER_CWD:-$PWD}"
+
 PROJECT_DIR="${1:-${BB_MCP_PROJECT_DIR:-$(pwd)}}"
 NREPL_PORT="${2:-${BB_MCP_NREPL_PORT:-}}"
 

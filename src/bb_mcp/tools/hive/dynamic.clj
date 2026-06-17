@@ -65,15 +65,17 @@
   (let [code (pr-str
               '(do
                  (require '[hive-mcp.tools.registry :as reg])
-                 (require '[hive-mcp.extensions.registry :as ext])
                  (pr-str
                   (mapv (fn [t]
                           {:name (:name t)
                            :description (:description t)
-                           :schema (:inputSchema t)})
-                        ;; Consolidated tools (supertools) + addon/extension tools
-                        (concat (reg/get-consolidated-tools)
-                                (ext/get-registered-tools))))))]
+                           :schema (:inputSchema t)
+                           :deprecated (boolean (:deprecated t))})
+                        ;; Single-sourced gated surface: consolidated roots +
+                        ;; addon/extension tools with the visibility gate applied.
+                        ;; Gate-deprecated tools stay in the list (callable) and
+                        ;; are filtered from tools/list in core.clj.
+                        (reg/get-advertised-tools)))))]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code
@@ -134,12 +136,16 @@
           nrepl-port 7910
           ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
           agent-id (or (:agent_id args) (get-agent-id))
-          ;; Inject bb-mcp's own cwd as _caller_cwd so hive-mcp can resolve the
-          ;; caller's project scope. bb-mcp runs per-session, so its user.dir IS
-          ;; the user's actual cwd. Without this, hive-mcp's shared JVM falls
-          ;; back to its own user.dir and scope silently degrades to "global".
+          ;; Inject the session's pwd as _caller_cwd so hive-mcp resolves the
+          ;; caller's project scope (HCR). BB_MCP_CALLER_CWD carries the
+          ;; invocation pwd captured by start-bb-mcp.sh before its cd; user.dir
+          ;; is bb-mcp's own script dir after that cd, and BB_MCP_PROJECT_DIR
+          ;; may be pinned by a registration arg — both are last resorts.
           ;; Only injects when caller did not already supply one (e.g. via SDK).
-          caller-cwd (or (:_caller_cwd args) (System/getProperty "user.dir"))
+          caller-cwd (or (:_caller_cwd args)
+                         (System/getenv "BB_MCP_CALLER_CWD")
+                         (System/getenv "BB_MCP_PROJECT_DIR")
+                         (System/getProperty "user.dir"))
           ;; Keep all args intact, only resolve agent_id for per-agent piggyback cursor
           hive-args (-> args
                         (assoc :agent_id agent-id)
@@ -186,9 +192,12 @@
 
 (defn- transform-tool
   "Transform hive-mcp tool spec to bb-mcp format.
-   hive-mcp: {:name, :description, :schema}
-   bb-mcp: {:spec {:name, :description, :schema}, :handler fn}"
-  [{:keys [name description schema]}]
+   hive-mcp: {:name, :description, :schema, :deprecated}
+   bb-mcp: {:spec {:name, :description, :schema}, :handler fn, :deprecated bool}
+
+   :deprecated tools stay in the registry — find-tool/tools/call still resolve
+   them — but are hidden from tools/list (see core.clj)."
+  [{:keys [name description schema deprecated]}]
   (let [base-schema (or schema {:type "object" :properties {} :required []})
         [schema' rename] (sanitize-schema base-schema)]
     (when (seq rename)
@@ -197,7 +206,8 @@
     {:spec {:name name
             :description description
             :schema schema'}
-     :handler (make-forwarding-handler name rename)}))
+     :handler (make-forwarding-handler name rename)
+     :deprecated (boolean deprecated)}))
 
 (defn- log-stderr [& args]
   "Log to stderr (stdout reserved for JSON-RPC)."

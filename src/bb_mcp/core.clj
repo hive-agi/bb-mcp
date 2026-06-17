@@ -57,10 +57,12 @@
 
 (def ^:private caller-cwd
   "Working directory of the Claude Code session (the project being worked on).
-   Prefers BB_MCP_PROJECT_DIR (set by start-bb-mcp.sh from the caller's cwd)
-   over user.dir, which is always bb-mcp's own script directory after the
-   'cd $SCRIPT_DIR' in start-bb-mcp.sh."
-  (or (System/getenv "BB_MCP_PROJECT_DIR")
+   Prefers BB_MCP_CALLER_CWD (the invocation pwd captured by start-bb-mcp.sh
+   before any cd — the user's actual session cwd) over BB_MCP_PROJECT_DIR
+   (which a registration arg may pin to a fixed path, e.g. hive-mcp) over
+   user.dir (always bb-mcp's own script directory after 'cd $SCRIPT_DIR')."
+  (or (System/getenv "BB_MCP_CALLER_CWD")
+      (System/getenv "BB_MCP_PROJECT_DIR")
       (System/getProperty "user.dir")))
 
 (defn- inject-agent-context
@@ -114,7 +116,9 @@
   nil) ;; Notification, no response
 
 (defmethod handle-method "tools/list" [{:keys [id]}]
-  (proto/tools-list-response id (map :spec (get-tools))))
+  ;; Hide gate-deprecated tools from discovery. find-tool still resolves them
+  ;; (see tools/call), so deprecated tools stay callable by name (back-compat).
+  (proto/tools-list-response id (->> (get-tools) (remove :deprecated) (map :spec))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
   (let [{:keys [name arguments]} params
