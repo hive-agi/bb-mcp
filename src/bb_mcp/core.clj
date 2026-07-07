@@ -111,10 +111,10 @@
   (first (filter #(= name (tool/tool-name %)) (get-tools))))
 
 (defn- invoke-safely
-  "Invoke tool `t` on `args`, folding a thrown exception into {:result :error?}."
-  [t args]
+  "Enrich `arguments`, invoke tool `t`, folding any thrown exception into {:result :error?}."
+  [t arguments]
   (try
-    (tool/invoke t args)
+    (tool/invoke t (inject-agent-context arguments))
     (catch Exception e {:result (str "Error: " (ex-message e)) :error? true})))
 
 (defn- call-tool
@@ -122,7 +122,7 @@
   [id name arguments]
   (let [t0 (System/currentTimeMillis)]
     (if-let [t (find-tool name)]
-      (let [{:keys [result error?]} (invoke-safely t (inject-agent-context arguments))
+      (let [{:keys [result error?]} (invoke-safely t arguments)
             response (proto/tool-call-response id result error?)]
         (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
         response)

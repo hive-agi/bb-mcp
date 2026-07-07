@@ -91,3 +91,17 @@
     (is (= "{\"a\":1}"
            (str/trim (with-out-str
                        (proto/write-msg (proto/stdio-transport) {:a 1})))))))
+
+(deftest malformed-arguments-test
+  (testing "an unknown tool with non-map arguments yields a clean -32601, no crash"
+    (with-redefs [core/get-tools (constantly [])]
+      (is (= (proto/json-rpc-error 1 -32601 "Unknown tool: nope")
+             (core/handle-method {:method "tools/call" :id 1
+                                  :params {:name "nope" :arguments "oops"}})))))
+  (testing "a found tool with non-map arguments folds the assoc failure into an isError response"
+    (with-redefs [core/get-tools
+                  (constantly [(tool/native-tool {:name "echo"}
+                                                 (fn [a] {:result (:x a) :error? false}))])]
+      (is (true? (get-in (core/handle-method {:method "tools/call" :id 2
+                                              :params {:name "echo" :arguments "oops"}})
+                         [:result :isError]))))))
