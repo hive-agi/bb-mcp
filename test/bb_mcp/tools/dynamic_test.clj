@@ -58,7 +58,7 @@
 
 (deftest make-forwarding-handler-test
   (testing "Forwarding handler is created correctly"
-    (let [handler (#'dynamic/make-forwarding-handler "test_tool")]
+    (let [handler (#'dynamic/make-forwarding-handler "test_tool" {})]
       (is (fn? handler) "Should return a function"))))
 
 ;; =============================================================================

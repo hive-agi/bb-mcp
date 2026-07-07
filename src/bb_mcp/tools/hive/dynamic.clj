@@ -11,7 +11,8 @@
    4. Cache tools in atom for session lifetime"
   (:require [bb-mcp.tools.nrepl :as nrepl]
             [cheshire.core :as json]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [bb-mcp.tool :as tool]))
 
 (defonce ^:private tool-cache (atom nil))
 
@@ -63,19 +64,14 @@
    We extract just the spec fields (not handler)."
   [{:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
   (let [code (pr-str
-              '(do
-                 (require '[hive-mcp.tools.registry :as reg])
-                 (pr-str
-                  (mapv (fn [t]
-                          {:name (:name t)
-                           :description (:description t)
-                           :schema (:inputSchema t)
-                           :deprecated (boolean (:deprecated t))})
-                        ;; Single-sourced gated surface: consolidated roots +
-                        ;; addon/extension tools with the visibility gate applied.
-                        ;; Gate-deprecated tools stay in the list (callable) and
-                        ;; are filtered from tools/list in core.clj.
-                        (reg/get-advertised-tools)))))]
+              '(pr-str
+                (mapv (fn [t]
+                        {:name (:name t)
+                         :description (:description t)
+                         :schema (:inputSchema t)
+                         :deprecated (boolean (:deprecated t))})
+                      ((requiring-resolve
+                        'hive-mcp.tools.registry/get-advertised-tools)))))]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code
@@ -191,23 +187,18 @@
          :error? (:error? resp)}))))
 
 (defn- transform-tool
-  "Transform hive-mcp tool spec to bb-mcp format.
-   hive-mcp: {:name, :description, :schema, :deprecated}
-   bb-mcp: {:spec {:name, :description, :schema}, :handler fn, :deprecated bool}
-
-   :deprecated tools stay in the registry — find-tool/tools/call still resolve
-   them — but are hidden from tools/list (see core.clj)."
+  "Transform a hive-mcp tool spec into a ForwardingTool."
   [{:keys [name description schema deprecated]}]
   (let [base-schema (or schema {:type "object" :properties {} :required []})
         [schema' rename] (sanitize-schema base-schema)]
     (when (seq rename)
       (binding [*out* *err*]
         (println "[dynamic] sanitized property keys for" name "->" rename)))
-    {:spec {:name name
-            :description description
-            :schema schema'}
-     :handler (make-forwarding-handler name rename)
-     :deprecated (boolean deprecated)}))
+    (tool/forwarding-tool {:name name
+                           :description description
+                           :schema schema'}
+                          (make-forwarding-handler name rename)
+                          deprecated)))
 
 (defn- log-stderr [& args]
   "Log to stderr (stdout reserved for JSON-RPC)."

@@ -94,3 +94,20 @@
   (write-message {:jsonrpc "2.0"
                   :method method
                   :params params}))
+
+;; Transport — the effectful message boundary
+
+(defprotocol Transport
+  "Reads and writes JSON-RPC messages over a byte boundary."
+  (read-msg  [t]     "Read the next message map, or nil at end of input.")
+  (write-msg [t msg] "Write a message map."))
+
+(defrecord StdioTransport []
+  Transport
+  (read-msg  [_]     (read-message))
+  (write-msg [_ msg] (write-message msg)))
+
+(defn stdio-transport
+  "Build a StdioTransport over *in*/*out*."
+  []
+  (->StdioTransport))

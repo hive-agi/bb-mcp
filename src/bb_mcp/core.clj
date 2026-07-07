@@ -6,7 +6,8 @@
             [bb-mcp.tools.hive :as hive]
             [bb-mcp.nrepl-spawn :as spawn]
             [cheshire.core :as json]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [bb-mcp.tool :as tool]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -93,18 +94,39 @@
 ;; File tools (read_file, file_write, glob_files, grep) are now loaded
 ;; dynamically from basic-tools-mcp IAddon via hive-mcp.
 (def ^:private native-tools
-  [{:spec bash/tool-spec
-    :handler (fn [args] (bash/format-result (bash/execute args)))}
-   {:spec nrepl/tool-spec
-    :handler nrepl/execute}])
+  [(tool/native-tool bash/tool-spec
+                     (fn [args] (bash/format-result (bash/execute args))))
+   (tool/native-tool nrepl/tool-spec nrepl/execute)])
+
+(def ^:private tool-sources
+  "Ordered tool providers; each a zero-arg fn returning a seq of Tool."
+  [(constantly native-tools) hive/get-tools])
 
 (defn get-tools
-  "Get all registered tools: native + hive-mcp (dynamic)."
-  []
-  (concat native-tools (hive/get-tools)))
+  "All registered tools from every source, in order."
+  ([] (get-tools tool-sources))
+  ([sources] (mapcat #(%) sources)))
 
 (defn find-tool [name]
-  (first (filter #(= name (get-in % [:spec :name])) (get-tools))))
+  (first (filter #(= name (tool/tool-name %)) (get-tools))))
+
+(defn- invoke-safely
+  "Invoke tool `t` on `args`, folding a thrown exception into {:result :error?}."
+  [t args]
+  (try
+    (tool/invoke t args)
+    (catch Exception e {:result (str "Error: " (ex-message e)) :error? true})))
+
+(defn- call-tool
+  "Resolve, invoke, log, and build the tools/call response for `name`."
+  [id name arguments]
+  (let [t0 (System/currentTimeMillis)]
+    (if-let [t (find-tool name)]
+      (let [{:keys [result error?]} (invoke-safely t (inject-agent-context arguments))
+            response (proto/tool-call-response id result error?)]
+        (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
+        response)
+      (proto/json-rpc-error id -32601 (str "Unknown tool: " name)))))
 
 ;; Message handlers
 (defmulti handle-method :method)
@@ -116,25 +138,11 @@
   nil) ;; Notification, no response
 
 (defmethod handle-method "tools/list" [{:keys [id]}]
-  ;; Hide gate-deprecated tools from discovery. find-tool still resolves them
-  ;; (see tools/call), so deprecated tools stay callable by name (back-compat).
-  (proto/tools-list-response id (->> (get-tools) (remove :deprecated) (map :spec))))
+  (proto/tools-list-response
+   id (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
-  (let [{:keys [name arguments]} params
-        enriched-args (inject-agent-context arguments)
-        t0 (System/currentTimeMillis)]
-    (if-let [tool (find-tool name)]
-      (try
-        (let [{:keys [result error?]} ((:handler tool) enriched-args)
-              response (proto/tool-call-response id result error?)]
-          (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
-          response)
-        (catch Exception e
-          (let [response (proto/tool-call-response id (str "Error: " (ex-message e)) true)]
-            (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
-            response)))
-      (proto/json-rpc-error id -32601 (str "Unknown tool: " name)))))
+  (call-tool id (:name params) (:arguments params)))
 
 (defmethod handle-method "resources/list" [{:keys [id]}]
   (proto/resources-list-response id []))
@@ -148,12 +156,15 @@
     nil)) ;; Ignore unknown notifications
 
 ;; Main loop
-(defn run-server []
-  (loop []
-    (when-let [msg (proto/read-message)]
-      (when-let [response (handle-method msg)]
-        (proto/write-message response))
-      (recur))))
+(defn run-server
+  "Read, dispatch, and write MCP messages over `transport` until input ends."
+  ([] (run-server (proto/stdio-transport)))
+  ([transport]
+   (loop []
+     (when-let [msg (proto/read-msg transport)]
+       (when-let [response (handle-method msg)]
+         (proto/write-msg transport response))
+       (recur)))))
 
 (defn -main [& _args]
   ;; Ensure hive-mcp nREPL is running (auto-spawn if needed)

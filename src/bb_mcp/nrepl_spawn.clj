@@ -103,17 +103,22 @@
     proc-running            :starting  ; Process exists but port not ready
     :else                   :not-running))
 
+(def default-probes
+  "Real probe fns used by detect-state."
+  {:port-fn port-listening? :lock-fn lock-file-exists? :proc-fn process-running?})
+
 (defn detect-state
   "Detect hive-mcp connection state.
    Combines probes into classified state with evidence.
    Returns {:status keyword :port int :evidence map}"
-  [port]
-  (let [port-result (port-listening? port)
-        lock-result (lock-file-exists?)
-        proc-result (process-running?)]
-    {:status   (classify-state port-result lock-result proc-result)
-     :port     port
-     :evidence {:port port-result :lock lock-result :process proc-result}}))
+  ([port] (detect-state port default-probes))
+  ([port {:keys [port-fn lock-fn proc-fn]}]
+   (let [port-result (port-fn port)
+         lock-result (lock-fn)
+         proc-result (proc-fn)]
+     {:status   (classify-state port-result lock-result proc-result)
+      :port     port
+      :evidence {:port port-result :lock lock-result :process proc-result}})))
 
 ;;; ============================================================
 ;;; Action Layer - Side effects based on state

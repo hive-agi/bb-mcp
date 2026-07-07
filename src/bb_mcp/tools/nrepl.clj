@@ -166,45 +166,84 @@
         :else nil))))
 
 ;; nREPL client
-(defn eval-code
-  "Evaluate Clojure code on a remote nREPL server."
-  [{:keys [port host code timeout-ms]}]
-  (let [host (or host "localhost")
-        timeout (or timeout-ms 600000)]
-    (try
-      (with-open [socket (doto (Socket. ^String host ^int port)
-                           (.setSoTimeout timeout))
-                  out (BufferedOutputStream. (.getOutputStream socket))
-                  in (PushbackInputStream. (BufferedInputStream. (.getInputStream socket)))]
-        ;; Send eval request as bytes
-        (let [request-bytes (bencode-to-bytes {:op "eval" :code code})]
-          (.write out request-bytes)
-          (.flush out))
+;; ── nREPL message vocabulary (pure) ──────────────────────────────────────────
 
-        ;; Read responses until "done" status
-        ;; NOTE: :value uses (update str) not (assoc) because nREPL's print
-        ;; middleware (CIDER) chunks large :value responses at buffer-size
-        ;; (default 1024 bytes). Using assoc keeps only the LAST chunk,
-        ;; truncating tool responses and piggyback ---HIVEMIND--- blocks.
-        (loop [results {:value "" :out "" :err ""}]
-          (if-let [response (bdecode-from-stream in)]
-            (let [status (get response :status [])]
-              (if (some #(= % "done") status)
-                (if (:ex response)
-                  {:result (str "Error: " (:err results) "\n" (:value response))
-                   :error? true}
-                  {:result (let [v (:value results)]
-                             (if (seq v) v (or (:out results) "nil")))
-                   :error? false})
-                (recur (cond-> results
-                         (:value response) (update :value str (:value response))
-                         (:out response) (update :out str (:out response))
-                         (:err response) (update :err str (:err response))))))
-            {:result "No response from nREPL"
-             :error? true})))
+(defn- has-status?
+  "True when nREPL response `msg` carries status `s`."
+  [msg s]
+  (some #(= % s) (get msg :status [])))
+
+(defn- reduce-messages
+  "Fold nREPL response messages into {:value :out :err :ex}. Pure."
+  [messages]
+  (reduce (fn [acc msg]
+            (cond-> acc
+              (:value msg) (update :value str (:value msg))
+              (:out msg)   (update :out str (:out msg))
+              (:err msg)   (update :err str (:err msg))
+              (:ex msg)    (assoc :ex (:ex msg))
+              (has-status? msg "eval-error") (update :ex #(or % "eval-error"))))
+          {:value "" :out "" :err "" :ex nil}
+          messages))
+
+(defn- messages->result
+  "Promote nREPL response messages into {:result str :error? bool}. Pure.
+   A stream that closed before a done message is reported as an error."
+  [messages]
+  (if-not (some #(has-status? % "done") messages)
+    {:result "No response from nREPL" :error? true}
+    (let [{:keys [value out err ex]} (reduce-messages messages)]
+      (if ex
+        {:result (str "Error: " ex
+                      (when (seq err) (str "\n" err))
+                      (when (seq value) (str "\n" value)))
+         :error? true}
+        {:result (if (seq value) value (or out "nil"))
+         :error? false}))))
+
+;; ── nREPL socket boundary (effectful) ────────────────────────────────────────
+
+(defn- send-eval-request!
+  "Write and flush an nREPL eval request for `code`. Boundary I/O."
+  [^OutputStream out code]
+  (.write out ^bytes (bencode-to-bytes {:op "eval" :code code}))
+  (.flush out))
+
+(defn- read-response-messages
+  "Read bencode response maps from `in` until (and including) the done message,
+   or until the stream closes. Boundary I/O."
+  [^PushbackInputStream in]
+  (loop [acc []]
+    (if-let [msg (bdecode-from-stream in)]
+      (let [acc' (conj acc msg)]
+        (if (has-status? msg "done") acc' (recur acc')))
+      acc)))
+
+;; ── Client ───────────────────────────────────────────────────────────────────
+
+(defprotocol NReplClient
+  "Evaluate Clojure code on a remote nREPL endpoint."
+  (eval-code* [client code opts]
+    "Eval `code` on `client`; returns {:result str :error? bool}."))
+
+(defrecord BencodeNReplClient [host port]
+  NReplClient
+  (eval-code* [_ code {:keys [timeout-ms]}]
+    (try
+      (with-open [socket (doto (Socket. ^String (or host "localhost") ^int port)
+                           (.setSoTimeout (or timeout-ms 600000)))
+                  out (BufferedOutputStream. (.getOutputStream socket))
+                  in  (PushbackInputStream. (BufferedInputStream. (.getInputStream socket)))]
+        (send-eval-request! out code)
+        (messages->result (read-response-messages in)))
       (catch Exception e
         {:result (str "nREPL connection failed: " (ex-message e))
          :error? true}))))
+
+(defn eval-code
+  "Evaluate Clojure code on a remote nREPL server via a BencodeNReplClient."
+  [{:keys [host port code] :as opts}]
+  (eval-code* (->BencodeNReplClient (or host "localhost") port) code opts))
 
 (def tool-spec
   {:name "clojure_eval"
