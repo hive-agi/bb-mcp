@@ -2,4 +2,5 @@
  :parent "hive"
  :description "Babashka MCP server implementation"
  :language :clojure
- :tags ["babashka" "mcp"]}
+ :tags ["babashka" "mcp"] 
+ :carto {:source-roots ["src" "test"]}}

@@ -1,0 +1,6 @@
+{:lib      io.github.hive-agi/bb-mcp
+ :minor    2
+ :license  {:name "MIT" :url "https://opensource.org/licenses/MIT"}
+ :scm-url  "https://github.com/hive-agi/bb-mcp"
+ :src-dirs ["src"]
+ :publish  :clojars}
