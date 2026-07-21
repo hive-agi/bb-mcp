@@ -304,12 +304,10 @@
 
 (defn- deploy-gitea
   "Publish the AOT jar to the private registry.
-   Env: MAVEN_TOKEN (required), MAVEN_USERNAME, MAVEN_URL."
+   Env: MAVEN_URL, MAVEN_USERNAME, MAVEN_TOKEN — all required, no defaults."
   []
-  (let [env      (fn [k d] (let [v (System/getenv k)] (if (str/blank? v) d v)))
-        url      (env "MAVEN_URL"
-                      "https://gitea.hive-mcp.com/api/packages/hive-agi/maven")
-        username (env "MAVEN_USERNAME" "buddhilw")
+  (let [url      (required-env "MAVEN_URL")
+        username (required-env "MAVEN_USERNAME")
         token    (required-env "MAVEN_TOKEN")
         auth     (str "Basic " (.encodeToString (java.util.Base64/getEncoder)
                                                 (.getBytes (str username ":" token))))]
