@@ -148,9 +148,19 @@
   "Configuration directory for hive-mcp."
   (str (System/getenv "HOME") "/.config/hive-mcp"))
 
+(defn local-deps-args
+  "-Sdeps args merging hive-mcp's gitignored local.deps.edn, or [] when absent.
+   Mirrors bin/hive-mcp: sibling :local/root overrides only exist there."
+  ([] (local-deps-args hive-mcp-dir))
+  ([dir]
+   (let [f (io/file dir "local.deps.edn")]
+     (if (.exists f)
+       ["-Sdeps" (slurp f)]
+       []))))
+
 (defn spawn-hive-mcp!
   "Spawn hive-mcp server process.
-   Uses start-mcp.sh if available, falls back to clojure -X:mcp.
+   Uses start-mcp.sh if available, falls back to clojure -Sdeps <local> -X:mcp.
    Logs to ~/.config/hive-mcp/server.log"
   []
   (let [script (str hive-mcp-dir "/start-mcp.sh")
@@ -166,10 +176,11 @@
                   :out :append :out-file log-file
                   :err :append :err-file log-file}
                  script)
-      (p/process {:dir hive-mcp-dir
-                  :out :append :out-file log-file
-                  :err :append :err-file log-file}
-                 "clojure" "-X:mcp"))))
+      (apply p/process
+             {:dir hive-mcp-dir
+              :out :append :out-file log-file
+              :err :append :err-file log-file}
+             (concat ["clojure"] (local-deps-args) ["-X:mcp"])))))
 
 ;;; ============================================================
 ;;; Orchestration Layer - Decision logic
