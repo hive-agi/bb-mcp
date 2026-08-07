@@ -110,12 +110,30 @@
 (defn find-tool [name]
   (first (filter #(= name (tool/tool-name %)) (get-tools))))
 
+(def ^:dynamic *tool-ceiling-ms*
+  "Hard ceiling on a single tool call. `BB_MCP_TOOL_TIMEOUT_MS` overrides it."
+  (or (some-> (System/getenv "BB_MCP_TOOL_TIMEOUT_MS") parse-long) 900000))
+
 (defn- invoke-safely
-  "Enrich `arguments`, invoke tool `t`, folding any thrown exception into {:result :error?}."
+  "Enrich `arguments`, invoke tool `t`, folding any thrown exception into
+  {:result :error?}.
+
+  A call that outlives `*tool-ceiling-ms*` is ABANDONED rather than waited on:
+  the run-server loop is single-threaded, so one tool that never returns would
+  otherwise take every later request with it. The abandoned work carries on in
+  its own thread; only this server's attention is reclaimed."
   [t arguments]
-  (try
-    (tool/invoke t (inject-agent-context arguments))
-    (catch Exception e {:result (str "Error: " (ex-message e)) :error? true})))
+  (let [work (future
+               (try
+                 (tool/invoke t (inject-agent-context arguments))
+                 (catch Exception e {:result (str "Error: " (ex-message e)) :error? true})))
+        outcome (deref work *tool-ceiling-ms* ::ceiling)]
+    (if (= ::ceiling outcome)
+      {:result (str "Error: the tool did not return within " *tool-ceiling-ms*
+                    "ms and was abandoned so the server stays responsive. "
+                    "It may still be running; check for side effects before retrying.")
+       :error? true}
+      outcome)))
 
 (defn- call-tool
   "Resolve, invoke, log, and build the tools/call response for `name`."

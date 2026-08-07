@@ -3,6 +3,7 @@
   (:require [clojure.test :as test]
             [bb-mcp.tool-test]
             [bb-mcp.tools.dynamic-test]
+            [bb-mcp.tools.bash-test]
             [bb-mcp.nrepl-spawn-test]
             [bb-mcp.core-test]))
 
@@ -10,6 +11,7 @@
   (let [result (test/run-tests
                 'bb-mcp.tool-test
                 'bb-mcp.tools.dynamic-test
+                'bb-mcp.tools.bash-test
                 'bb-mcp.nrepl-spawn-test
                 'bb-mcp.core-test)]
     (System/exit (if (and (zero? (:fail result))

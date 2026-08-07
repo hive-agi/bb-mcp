@@ -34,6 +34,20 @@
             (tool/native-tool {:name "x"} (fn [_] (throw (ex-info "boom" {}))))
             {})))))
 
+(deftest invoke-safely-abandons-a-tool-that-never-returns
+  (testing "the loop is single-threaded, so one stuck tool must not hold it"
+    (let [t0 (System/currentTimeMillis)
+          {:keys [result error?]}
+          (binding [core/*tool-ceiling-ms* 250]
+            (#'core/invoke-safely
+             (tool/native-tool {:name "stuck"}
+                               (fn [_] (Thread/sleep 30000) {:result "never" :error? false}))
+             {}))
+          elapsed (- (System/currentTimeMillis) t0)]
+      (is (true? error?))
+      (is (str/includes? result "abandoned"))
+      (is (< elapsed 5000) "returned on the ceiling, not on the tool"))))
+
 (deftest call-tool-happy-test
   (testing "resolve -> invoke -> build response for a found tool"
     (with-redefs [core/get-tools
