@@ -4,10 +4,11 @@
             [bb-mcp.tools.bash :as bash]
             [bb-mcp.tools.nrepl :as nrepl]
             [bb-mcp.tools.hive :as hive]
-            [bb-mcp.nrepl-spawn :as spawn]
             [cheshire.core :as json]
             [clojure.string :as str]
-            [bb-mcp.tool :as tool]))
+            [bb-mcp.tool :as tool]
+            [bb-mcp.host.bb :as host-bb]
+            [bb-mcp.host.port :as hp]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -184,10 +185,22 @@
          (proto/write-msg transport response))
        (recur)))))
 
+(defn- warn-unless-nrepl-reachable!
+  "Print a startup hint to stderr when no nREPL answers on the resolved port.
+  The hive-mcp JVM is started by its own launcher, never by this process."
+  []
+  (let [port (nrepl/get-nrepl-port)]
+    (when-not (try
+                (hp/close! (host-bb/open {:port port :timeout-ms 1000}))
+                true
+                (catch Exception _ false))
+      (binding [*out* *err*]
+        (println (str "bb-mcp: no hive-mcp nREPL on port " port
+                      " — start it with the `hive-mcp` launcher."
+                      " Until then only native tools are available."))))))
+
 (defn -main [& _args]
-  ;; Ensure hive-mcp nREPL is running (auto-spawn if needed)
-  (spawn/ensure-nrepl!)
-  ;; Load tools dynamically from hive-mcp (falls back to static on failure)
+  (warn-unless-nrepl-reachable!)
   (hive/init!)
   (run-server))
 

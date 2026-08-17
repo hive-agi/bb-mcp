@@ -4,7 +4,8 @@
             [bb-mcp.tool-test]
             [bb-mcp.tools.dynamic-test]
             [bb-mcp.tools.bash-test]
-            [bb-mcp.nrepl-spawn-test]
+            [bb-mcp.wire.bencode-test]
+            [bb-mcp.host.conformance-test]
             [bb-mcp.core-test]))
 
 (defn -main [& _args]
@@ -12,7 +13,8 @@
                 'bb-mcp.tool-test
                 'bb-mcp.tools.dynamic-test
                 'bb-mcp.tools.bash-test
-                'bb-mcp.nrepl-spawn-test
+                'bb-mcp.wire.bencode-test
+                'bb-mcp.host.conformance-test
                 'bb-mcp.core-test)]
     (System/exit (if (and (zero? (:fail result))
                           (zero? (:error result)))
