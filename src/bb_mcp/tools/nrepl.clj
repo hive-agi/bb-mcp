@@ -6,8 +6,27 @@
    passed as :open-fn."
   (:require [clojure.string :as str]
             [bb-mcp.wire.bencode :as bencode]
-            [bb-mcp.host.port :as hp]
-            [bb-mcp.host.bb :as host-bb]))
+            [bb-mcp.host.port :as hp]))
+
+(defonce ^:private adapter (atom nil))
+
+(defn set-adapter!
+  "Install the IByteChannel open-fn this namespace uses by default.
+   Called by the composition root; each runtime installs its own."
+  [open-fn]
+  (reset! adapter open-fn))
+
+(defn- resolved-adapter
+  "The installed adapter, else the JVM/babashka one resolved softly.
+   The soft resolve keeps every entry point working without a load-time
+   dependency on a host; a runtime lacking java.net.Socket gets nil here and
+   installs its own via `set-adapter!`."
+  []
+  (or @adapter
+      (when-let [f (try (requiring-resolve 'bb-mcp.host.bb/open)
+                        (catch Throwable _ nil))]
+        (reset! adapter f)
+        f)))
 
 ;; ── nREPL message vocabulary (pure) ──────────────────────────────────────────
 
@@ -107,11 +126,14 @@
 
 (defn eval-code
   "Evaluate Clojure code on a remote nREPL server.
-   `:open-fn` injects the IByteChannel adapter (default: the babashka socket)."
+   `:open-fn` injects the IByteChannel adapter; without it the one installed by
+   `set-adapter!` is used."
   [{:keys [host port code open-fn] :as opts}]
-  (eval-code* (->BencodeNReplClient (or host "localhost") port
-                                    (or open-fn host-bb/open))
-              code opts))
+  (if-let [open (or open-fn (resolved-adapter))]
+    (eval-code* (->BencodeNReplClient (or host "localhost") port open) code opts)
+    {:result (str "No IByteChannel adapter installed. The composition root must "
+                  "call bb-mcp.tools.nrepl/set-adapter! with its host's open-fn.")
+     :error? true}))
 
 (def tool-spec
   {:name "clojure_eval"

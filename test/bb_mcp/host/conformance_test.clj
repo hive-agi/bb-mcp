@@ -89,6 +89,18 @@
     (is (true? error?))
     (is (re-find #"nREPL connection failed" result))))
 
+(deftest the-default-adapter-resolves-without-a-composition-root
+  (testing "an entry point that never calls set-adapter! still gets a host adapter"
+    ;; Port 1 refuses, so reaching \"connection failed\" proves an adapter was
+    ;; resolved AND used. Guards the silent degradation where the dynamic tool
+    ;; loader quietly returned 0 tools while every test still passed.
+    (let [{:keys [result error?]}
+          (nrepl/eval-code {:host "127.0.0.1" :port 1 :code "(+ 1 1)" :timeout-ms 2000})]
+      (is (true? error?))
+      (is (not (re-find #"No IByteChannel adapter" result))
+          "the adapter must resolve softly, not be left nil")
+      (is (re-find #"nREPL connection failed" result)))))
+
 ;; ── the same contract against the real socket adapter ────────────────────────
 
 (defn- nrepl-listening? []

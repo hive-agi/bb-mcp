@@ -200,6 +200,7 @@
                       " Until then only native tools are available."))))))
 
 (defn -main [& _args]
+  (nrepl/set-adapter! host-bb/open)
   (warn-unless-nrepl-reachable!)
   (hive/init!)
   (run-server))
