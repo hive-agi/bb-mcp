@@ -10,7 +10,6 @@
    3. Create forwarding handlers that delegate to hive-mcp
    4. Cache tools in atom for session lifetime"
   (:require [bb-mcp.tools.nrepl :as nrepl]
-            [cheshire.core :as json]
             [clojure.edn :as edn]
             [bb-mcp.tool :as tool]))
 

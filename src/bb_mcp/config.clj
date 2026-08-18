@@ -1,8 +1,6 @@
 (ns bb-mcp.config
   "Configuration management for bb-mcp."
-  (:require [babashka.fs :as fs]
-            [cheshire.core :as json]
-            [clojure.string :as str]))
+  (:require [clojure.string :as str]))
 
 (def default-config
   {:project-dir (System/getProperty "user.dir")
@@ -13,7 +11,7 @@
   "Find nREPL port from .nrepl-port file in project dir."
   [project-dir]
   (let [port-file (str project-dir "/.nrepl-port")]
-    (when (fs/exists? port-file)
+    (when (.exists (java.io.File. port-file))
       (parse-long (str/trim (slurp port-file))))))
 
 (defn load-config

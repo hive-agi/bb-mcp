@@ -1,7 +1,7 @@
 (ns bb-mcp.protocol
   "MCP JSON-RPC protocol implementation for babashka.
    Handles stdio communication with Claude."
-  (:require [cheshire.core :as json]
+  (:require [bb-mcp.host.port :as hp]
             [clojure.string :as str]))
 
 ;; MCP Protocol constants
@@ -70,21 +70,21 @@
             (let [sb (StringBuilder.)]
               (dotimes [_ content-length]
                 (.append sb (char (.read *in*))))
-              (json/parse-string (str sb) true)))
+              (hp/json-decode (str sb))))
 
           ;; Try to parse as JSON directly (newline-delimited format)
           (str/starts-with? line "{")
-          (json/parse-string line true)
+          (hp/json-decode line)
 
           ;; Unexpected line - skip it
           :else (recur))))
-    (catch Exception e
+    (catch Exception _
       nil)))
 
 (defn write-message
   "Write a JSON-RPC message to stdout as newline-delimited JSON."
   [msg]
-  (let [json-str (json/generate-string msg)]
+  (let [json-str (hp/json-encode msg)]
     (println json-str)
     (flush)))
 

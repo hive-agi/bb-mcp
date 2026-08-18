@@ -1,13 +1,10 @@
 (ns bb-mcp.core
   "Main entry point for bb-mcp - lightweight MCP server in babashka."
   (:require [bb-mcp.protocol :as proto]
-            [bb-mcp.tools.bash :as bash]
             [bb-mcp.tools.nrepl :as nrepl]
             [bb-mcp.tools.hive :as hive]
-            [cheshire.core :as json]
             [clojure.string :as str]
             [bb-mcp.tool :as tool]
-            [bb-mcp.host.bb :as host-bb]
             [bb-mcp.host.port :as hp]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
@@ -27,7 +24,7 @@
                      "TOOL: " tool-name
                      (when is-error? " [ERROR]")
                      " (" elapsed-ms "ms)\n"
-                     "ARGS: " (json/generate-string args {:pretty false}) "\n"
+                     "ARGS: " (hp/json-encode args) "\n"
                      "RESP: " (or truncated "<nil>") "\n\n")]
       (spit log-file entry :append true))
     (catch Exception _ nil)))
@@ -35,22 +32,13 @@
 ;; Agent context injection - auto-add agent_id from env var for attribution
 
 (def ^:private instance-id
-  "Stable ID for this bb-mcp session. Uses parent PID (Claude Code process)
-   so the identity survives bb-mcp restarts within the same session.
-   Falls back to own PID, then random UUID.
+  "Stable ID for this bb-mcp session, from the host seam.
 
-   Why PPID: Each Claude Code window spawns bb-mcp as a child process.
-   The parent PID is stable for the session lifetime. When bb-mcp restarts
-   (e.g., tool refresh), the PPID stays the same, so cursor positions
-   are preserved instead of re-reading from timestamp 0."
-  (let [ppid (try
-               (let [parent (.parent (java.lang.ProcessHandle/current))]
-                 (when (.isPresent parent)
-                   (str (.pid (.get parent)))))
-               (catch Exception _ nil))
-        pid  (try (str (.pid (java.lang.ProcessHandle/current)))
-                  (catch Exception _ nil))]
-    (or ppid pid (subs (str (java.util.UUID/randomUUID)) 0 8))))
+   Why it must be stable: each Claude Code window spawns bb-mcp as a child
+   process. When bb-mcp restarts (e.g. tool refresh) the id must not change,
+   or cursor positions are lost and every dynamic tool re-reads from
+   timestamp 0."
+  (hp/session-id))
 
 (defn- get-agent-id
   "Get agent ID from CLAUDE_SWARM_SLAVE_ID env var, or nil if not set."
@@ -94,10 +82,24 @@
 ;; Native bb-mcp tools (bootstrapping essentials only)
 ;; File tools (read_file, file_write, glob_files, grep) are now loaded
 ;; dynamically from basic-tools-mcp IAddon via hive-mcp.
+(defn- bash-tool
+  "The bash tool, or nil on a runtime that cannot spawn a subprocess.
+
+   Resolved rather than required: `bb-mcp.tools.bash` names babashka.process
+   at load time, so a hard require would take the whole server down on a
+   runtime that has no process surface at all."
+  []
+  (let [rslv (fn [nm] (try (requiring-resolve (symbol "bb-mcp.tools.bash" nm))
+                           (catch Exception _ nil)))]
+    (when-let [execute (rslv "execute")]
+      (let [spec @(rslv "tool-spec")
+            fmt (rslv "format-result")]
+        (tool/native-tool spec (fn [args] (fmt (execute args))))))))
+
 (def ^:private native-tools
-  [(tool/native-tool bash/tool-spec
-                     (fn [args] (bash/format-result (bash/execute args))))
-   (tool/native-tool nrepl/tool-spec nrepl/execute)])
+  (into [] (remove nil?)
+        [(bash-tool)
+         (tool/native-tool nrepl/tool-spec nrepl/execute)]))
 
 (def ^:private tool-sources
   "Ordered tool providers; each a zero-arg fn returning a seq of Tool."
@@ -191,7 +193,7 @@
   []
   (let [port (nrepl/get-nrepl-port)]
     (when-not (try
-                (hp/close! (host-bb/open {:port port :timeout-ms 1000}))
+                (hp/close! (hp/open {:port port :timeout-ms 1000}))
                 true
                 (catch Exception _ false))
       (binding [*out* *err*]
@@ -199,8 +201,18 @@
                       " — start it with the `hive-mcp` launcher."
                       " Until then only native tools are available."))))))
 
+(defn- warn-unless-bash-available!
+  "Print a startup line to stderr when this runtime cannot spawn a subprocess,
+  so a shorter tools/list reads as a stated limit rather than a silent one."
+  []
+  (when-not (some #(= "bash" (tool/tool-name %)) native-tools)
+    (binding [*out* *err*]
+      (println (str "bb-mcp: no subprocess surface on this runtime ("
+                    (hp/adapter-ns) ") — the bash tool is not served.")))))
+
 (defn -main [& _args]
   (warn-unless-nrepl-reachable!)
+  (warn-unless-bash-available!)
   (hive/init!)
   (run-server))
 

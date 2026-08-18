@@ -6,7 +6,6 @@
    contract against the real JVM when one is listening."
   (:require [clojure.test :refer [deftest testing is]]
             [bb-mcp.host.port :as hp]
-            [bb-mcp.host.bb :as host-bb]
             [bb-mcp.tools.nrepl :as nrepl]))
 
 ;; Real bytes captured from the live hive-mcp nREPL answering (+ 1 2):
@@ -93,14 +92,14 @@
 
 (defn- nrepl-listening? []
   (try
-    (hp/close! (host-bb/open {:port 7910 :timeout-ms 1000}))
+    (hp/close! (hp/open {:port 7910 :timeout-ms 1000}))
     true
     (catch Exception _ false)))
 
 (deftest socket-arm-satisfies-the-contract
   (if-not (nrepl-listening?)
     (println "SKIP socket-arm-satisfies-the-contract — no nREPL on 7910")
-    (testing "the babashka socket adapter answers the same as the loopback"
-      (let [{:keys [result error?]} (eval-through host-bb/open)]
+    (testing (str "the " (hp/adapter-ns) " socket adapter answers the same as the loopback")
+      (let [{:keys [result error?]} (eval-through hp/open)]
         (is (= "3" result))
         (is (false? error?))))))
