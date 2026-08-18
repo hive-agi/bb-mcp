@@ -28,6 +28,15 @@
           {:value "" :out "" :err "" :ex nil}
           messages))
 
+(defn- non-empty?
+  "True when string `s` has content.
+
+   Never `(seq s)`: on a string that is a fold over its characters, and cljw
+   builds that fold in O(n^2) — 90 seconds for the 147 KB tool-list response,
+   spent entirely on deciding whether it was empty."
+  [s]
+  (pos? (count s)))
+
 (defn- messages->result
   "Promote nREPL response messages into {:result str :error? bool}. Pure.
    A stream that closed before a done message is reported as an error."
@@ -37,10 +46,10 @@
     (let [{:keys [value out err ex]} (reduce-messages messages)]
       (if ex
         {:result (str "Error: " ex
-                      (when (seq err) (str "\n" err))
-                      (when (seq value) (str "\n" value)))
+                      (when (non-empty? err) (str "\n" err))
+                      (when (non-empty? value) (str "\n" value)))
          :error? true}
-        {:result (if (seq value) value (or out "nil"))
+        {:result (if (non-empty? value) value (or out "nil"))
          :error? false}))))
 
 ;; ── framing (pure byte bookkeeping) ──────────────────────────────────────────
