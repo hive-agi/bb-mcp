@@ -33,5 +33,26 @@ export BB_MCP_NREPL_PORT="${NREPL_PORT:-}"
 # Change to bb-mcp directory (where bb.edn is)
 cd "$SCRIPT_DIR"
 
-# Start bb-mcp
-exec bb -m bb-mcp.core
+# Start bb-mcp on the selected runtime.
+#
+#   BB_MCP_RUNTIME=bb    (default) babashka, using bb.edn for the classpath
+#   BB_MCP_RUNTIME=cljw            ClojureWasm, classpath given explicitly
+#   CLJW_BIN                       cljw binary to use (default: cljw on PATH)
+#
+# cljw has no process introspection, so the session id — which keeps per-session
+# cursors stable across a bb-mcp restart — has to be handed to it. $PPID here is
+# the process that launched this script, which is the same identity the babashka
+# arm derives from ProcessHandle.
+case "${BB_MCP_RUNTIME:-bb}" in
+    cljw)
+        export BB_MCP_SESSION_ID="${BB_MCP_SESSION_ID:-$PPID}"
+        exec "${CLJW_BIN:-cljw}" -cp src -m bb-mcp.core
+        ;;
+    bb|"")
+        exec bb -m bb-mcp.core
+        ;;
+    *)
+        echo "start-bb-mcp.sh: unknown BB_MCP_RUNTIME '${BB_MCP_RUNTIME}' (want bb or cljw)" >&2
+        exit 2
+        ;;
+esac
