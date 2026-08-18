@@ -66,14 +66,29 @@
 
 (defn- ub [^bytes ba i] (bit-and (aget ba i) 255))
 
+(def ^:private max-digits
+  "Longest digit run this codec will fold. 18 digits always fit a 64-bit
+   accumulator, so the fold cannot overflow."
+  18)
+
 (defn- read-digits
-  "Base-10 digits from `i` up to `term`. => [n next-offset] | ::incomplete."
+  "Base-10 digits from `i` up to `term`. => [n next-offset] | ::incomplete.
+
+   A byte that is not a digit, an empty run, and a run longer than
+   `max-digits` are all reported incomplete: none of them can begin a frame
+   this codec produced, and folding them yields a wrong length rather than a
+   detected one."
   [ba i limit term]
   (loop [j i acc 0]
     (cond
       (>= j limit)       incomplete
-      (= term (ub ba j)) [acc (inc j)]
-      :else              (recur (inc j) (+ (* acc 10) (- (ub ba j) 48))))))
+      (= term (ub ba j)) (if (= j i) incomplete [acc (inc j)])
+      (>= (- j i) max-digits) incomplete
+      :else
+      (let [d (- (ub ba j) 48)]
+        (if (or (neg? d) (> d 9))
+          incomplete
+          (recur (inc j) (+ (* acc 10) d)))))))
 
 (defn- read-int
   "Bencode integer body (after the leading i). => [n next-offset] | ::incomplete."
@@ -142,10 +157,15 @@
         :else     (decode-string ba i limit)))))
 
 (defn decode-all
-  "Decode every complete value in [0, limit). => [values next-offset]."
-  [ba limit]
-  (loop [i 0 acc []]
-    (let [r (decode ba i limit)]
-      (if (= incomplete r)
-        [acc i]
-        (recur (second r) (conj acc (first r)))))))
+  "Decode every complete value in [start, limit). => [values next-offset].
+
+   The `start` arity lets a reader keep ONE growing buffer and resume where
+   the last pass stopped, instead of copying the undecoded tail into a fresh
+   array after every read."
+  ([ba limit] (decode-all ba 0 limit))
+  ([ba start limit]
+   (loop [i start acc []]
+     (let [r (decode ba i limit)]
+       (if (= incomplete r)
+         [acc i]
+         (recur (second r) (conj acc (first r))))))))
