@@ -6,8 +6,7 @@
    passed as :open-fn."
   (:require [clojure.string :as str]
             [bb-mcp.wire.bencode :as bencode]
-            [bb-mcp.host.port :as hp]
-            [bb-mcp.host.bb :as host-bb]))
+            [bb-mcp.host.port :as hp]))
 
 ;; ── nREPL message vocabulary (pure) ──────────────────────────────────────────
 
@@ -46,40 +45,45 @@
 
 ;; ── framing (pure byte bookkeeping) ──────────────────────────────────────────
 
-(defn- append-bytes
-  "Byte-array holding all of `a` followed by the first `n` bytes of `b`."
-  ^bytes [^bytes a ^bytes b n]
-  (let [alen (alength a)
-        out  (byte-array (+ alen n))]
-    (System/arraycopy a 0 out 0 alen)
-    (System/arraycopy b 0 out alen n)
-    out))
+(defn- ensure-room
+  "A buffer holding the first `used` bytes of `buf` with room for `extra` more.
+   Returns `buf` itself when it already fits.
 
-(defn- drop-prefix
-  "Byte-array holding `a` from `off` onward."
-  ^bytes [^bytes a off]
-  (let [len (- (alength a) off)
-        out (byte-array len)]
-    (System/arraycopy a off out 0 len)
-    out))
+   Capacity doubles, so filling a response costs O(size) copying in total. The
+   previous shape — a fresh exact-size array per read — was O(size^2 / chunk),
+   which is invisible at 4 KB and is the whole cost at a megabyte."
+  ^bytes [^bytes buf used extra]
+  (let [cap (alength buf)
+        need (+ used extra)]
+    (if (<= need cap)
+      buf
+      (let [cap' (loop [c (max cap 65536)] (if (>= c need) c (recur (* 2 c))))
+            out (byte-array cap')]
+        (System/arraycopy buf 0 out 0 used)
+        out))))
 
 ;; ── channel boundary (effectful) ─────────────────────────────────────────────
 
 (defn- read-messages!
   "Read bencode messages from `ch` until one carries a done status, or the
-   channel ends. Boundary I/O."
+   channel ends. Boundary I/O.
+
+   One buffer grows across the whole response and `scanned` remembers where
+   the last decode pass stopped, so neither the consumed head nor the
+   undecoded tail is ever copied again."
   [ch]
-  (let [buf (byte-array 65536)]
-    (loop [acc [] ^bytes pending (byte-array 0)]
-      (let [[msgs off] (bencode/decode-all pending (alength pending))
-            acc'       (into acc msgs)
-            pending'   (if (pos? off) (drop-prefix pending off) pending)]
+  (let [chunk (byte-array 65536)]
+    (loop [acc [] buf (byte-array 65536) used 0 scanned 0]
+      (let [[msgs off] (bencode/decode-all buf scanned used)
+            acc' (into acc msgs)]
         (if (some #(has-status? % "done") msgs)
           acc'
-          (let [n (hp/read-bytes! ch buf)]
+          (let [n (hp/read-bytes! ch chunk)]
             (if (neg? n)
               acc'
-              (recur acc' (append-bytes pending' buf n)))))))))
+              (let [buf' (ensure-room buf used n)]
+                (System/arraycopy chunk 0 buf' used n)
+                (recur acc' buf' (+ used n) off)))))))))
 
 ;; ── Client ───────────────────────────────────────────────────────────────────
 
@@ -107,10 +111,10 @@
 
 (defn eval-code
   "Evaluate Clojure code on a remote nREPL server.
-   `:open-fn` injects the IByteChannel adapter (default: the babashka socket)."
+   `:open-fn` injects the IByteChannel adapter (default: the host seam's)."
   [{:keys [host port code open-fn] :as opts}]
   (eval-code* (->BencodeNReplClient (or host "localhost") port
-                                    (or open-fn host-bb/open))
+                                    (or open-fn hp/open))
               code opts))
 
 (def tool-spec
