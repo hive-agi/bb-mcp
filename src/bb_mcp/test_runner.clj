@@ -8,7 +8,8 @@
             [bb-mcp.core-test]
             [bb-mcp.wire.bencode-props-test]
             [bb-mcp.wire.bencode-mutation-test]
-            [bb-mcp.host.json-props-test]))
+            [bb-mcp.host.json-props-test]
+            [bb-mcp.tools.bash.remote-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -19,7 +20,8 @@
    'bb-mcp.wire.bencode-mutation-test
    'bb-mcp.host.conformance-test
    'bb-mcp.host.json-props-test
-   'bb-mcp.core-test])
+   'bb-mcp.core-test
+   'bb-mcp.tools.bash.remote-test])
 
 (def ^:private host-suites
   "Suites whose SUBJECT is a host primitive some runtime may not have. A

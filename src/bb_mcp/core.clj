@@ -1,6 +1,8 @@
 (ns bb-mcp.core
   "Main entry point for bb-mcp - lightweight MCP server in babashka."
   (:require [bb-mcp.protocol :as proto]
+            [bb-mcp.tools.bash.remote :as remote-bash]
+            [bb-mcp.tools.bash.spec :as bash-spec]
             [bb-mcp.tools.nrepl :as nrepl]
             [bb-mcp.tools.hive :as hive]
             [clojure.string :as str]
@@ -82,19 +84,27 @@
 ;; Native bb-mcp tools (bootstrapping essentials only)
 ;; File tools (read_file, file_write, glob_files, grep) are now loaded
 ;; dynamically from basic-tools-mcp IAddon via hive-mcp.
-(defn- bash-tool
-  "The bash tool, or nil on a runtime that cannot spawn a subprocess.
+(defn- local-bash
+  "`bb-mcp.tools.bash/execute`, or nil when this runtime cannot spawn.
 
-   Resolved rather than required: `bb-mcp.tools.bash` names babashka.process
-   at load time, so a hard require would take the whole server down on a
-   runtime that has no process surface at all."
+   Resolved rather than required: that namespace names babashka.process at load
+   time, so a hard require would take the whole server down on a runtime that
+   has no process surface at all."
   []
-  (let [rslv (fn [nm] (try (requiring-resolve (symbol "bb-mcp.tools.bash" nm))
-                           (catch Exception _ nil)))]
-    (when-let [execute (rslv "execute")]
-      (let [spec @(rslv "tool-spec")
-            fmt (rslv "format-result")]
-        (tool/native-tool spec (fn [args] (fmt (execute args))))))))
+  (try (requiring-resolve 'bb-mcp.tools.bash/execute)
+       (catch Exception _ nil)))
+
+(defn- bash-tool
+  "The bash tool, wired to whichever executor this runtime can offer.
+
+   A runtime without a subprocess still SERVES it: `bb-mcp.tools.bash.remote`
+   hands the command to the hive-mcp JVM over the nREPL socket this head
+   already holds, so `tools/list` is the same on every runtime and a client
+   never has to ask which head it reached."
+  []
+  (let [execute (or (local-bash) remote-bash/execute)]
+    (tool/native-tool bash-spec/tool-spec
+                      (fn [args] (bash-spec/format-result (execute args))))))
 
 (def ^:private native-tools
   (into [] (remove nil?)
@@ -201,18 +211,20 @@
                       " — start it with the `hive-mcp` launcher."
                       " Until then only native tools are available."))))))
 
-(defn- warn-unless-bash-available!
-  "Print a startup line to stderr when this runtime cannot spawn a subprocess,
-  so a shorter tools/list reads as a stated limit rather than a silent one."
+(defn- warn-where-bash-runs!
+  "State the executor when bash is NOT this process's own subprocess, so a
+  command that lands in another process is a stated fact rather than a
+  surprise in a stack trace."
   []
-  (when-not (some #(= "bash" (tool/tool-name %)) native-tools)
+  (when-not (local-bash)
     (binding [*out* *err*]
       (println (str "bb-mcp: no subprocess surface on this runtime ("
-                    (hp/adapter-ns) ") — the bash tool is not served.")))))
+                    (hp/adapter-ns) ") — bash runs in the hive-mcp JVM, "
+                    "over the nREPL socket on port " (nrepl/get-nrepl-port) ".")))))
 
 (defn -main [& _args]
   (warn-unless-nrepl-reachable!)
-  (warn-unless-bash-available!)
+  (warn-where-bash-runs!)
   (hive/init!)
   (run-server))
 
