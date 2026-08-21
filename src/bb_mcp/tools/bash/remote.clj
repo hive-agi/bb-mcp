@@ -10,8 +10,12 @@
 
    Result contract of exec!, matched here key for key:
      {:ok {:exit n :stdout s :stderr s :duration-ms d}}   ran
-     {:ok {:error :shell/timeout :timeout-ms n}}          killed at the deadline
-     {:error :shell/exec-failed :message s}               never started"
+     {:error :shell/timeout :timeout-ms n}                killed at the deadline
+     {:error :shell/exec-failed :message s}               never started
+
+   The deadline shape is version-dependent, and this head does not choose the
+   hive-system it talks to: builds before the flattening returned the timeout
+   as {:ok {:error :shell/timeout}}. Both are accepted."
   (:require [bb-mcp.tools.bash.spec :as spec]
             [bb-mcp.tools.nrepl :as nrepl]
             [clojure.edn :as edn]))
@@ -32,13 +36,19 @@
      (into {} ((requiring-resolve 'hive-system.shell.core/exec!) ~command ~opts)))))
 
 (defn- ->result
-  "Fold one exec! Result into bb-mcp.tools.bash/execute's shape."
+  "Fold one exec! Result into bb-mcp.tools.bash/execute's shape.
+
+  A timeout is recognised in EITHER position on purpose. hive-system flattened
+  :shell/timeout to a top-level err, but this head calls whatever hive-system
+  the running JVM happens to have loaded, which may still be the older build
+  that returned {:ok {:error :shell/timeout}}. Checking the flat shape first
+  also keeps a timeout from being read as a spawn failure with no message."
   [{:keys [ok error message] :as r} timeout]
   (cond
-    error {:exit-code -1 :stdout "" :stderr (str message) :error (str message)}
-
-    (= :shell/timeout (:error ok))
+    (or (= :shell/timeout error) (= :shell/timeout (:error ok)))
     {:exit-code -1 :stdout "" :stderr "Command timed out" :timed-out true}
+
+    error {:exit-code -1 :stdout "" :stderr (str message) :error (str message)}
 
     (:error ok)
     {:exit-code -1 :stdout "" :stderr (str (:error ok)) :error (str (:error ok))}

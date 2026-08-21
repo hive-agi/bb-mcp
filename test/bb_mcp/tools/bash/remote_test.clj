@@ -39,6 +39,20 @@
       (is (= -1 (:exit-code r)))
       (is (nil? (:error r)) "a timeout is a result, not a transport failure"))))
 
+(deftest killed-at-the-deadline-flat-shape
+  (testing "hive-system's flattened :shell/timeout is still read as a timeout"
+    ;; hive-system stopped wrapping the timeout err in an ok. This head calls
+    ;; whichever hive-system the running JVM loaded, so both shapes must fold
+    ;; to the same answer -- otherwise a timeout reads as a spawn failure whose
+    ;; message is empty, because the flat err carries no :message.
+    (let [r (run {:command "sleep 2" :timeout_ms 200}
+                 {:error :shell/timeout :cmd "sleep 2" :timeout-ms 200
+                  :duration-ms 201.4})]
+      (is (true? (:timed-out r)))
+      (is (= -1 (:exit-code r)))
+      (is (= "Command timed out" (:stderr r)))
+      (is (nil? (:error r)) "a timeout is a result, not a transport failure"))))
+
 (deftest never-started
   (testing "a process that could not be spawned surfaces its message"
     (let [r (run {:command "pwd" :working_directory "/nonexistent-xyz"}
