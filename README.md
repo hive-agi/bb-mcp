@@ -1,5 +1,14 @@
 # bb-mcp
 
+<!-- hive-badges -->
+
+[![Clojars Project](https://img.shields.io/clojars/v/io.github.hive-agi/bb-mcp.svg)](https://clojars.org/io.github.hive-agi/bb-mcp)
+[![cljdoc](https://cljdoc.org/badge/io.github.hive-agi/bb-mcp)](https://cljdoc.org/d/io.github.hive-agi/bb-mcp/CURRENT)
+[![release](https://github.com/hive-agi/bb-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/hive-agi/bb-mcp/actions/workflows/release.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
+<!-- /hive-badges -->
+
 Lightweight MCP (Model Context Protocol) server in Babashka that bridges Claude Code to Emacs via nREPL.
 
 ## Why bb-mcp?
