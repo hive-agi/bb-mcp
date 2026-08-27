@@ -7,7 +7,8 @@
             [bb-mcp.tools.hive :as hive]
             [clojure.string :as str]
             [bb-mcp.tool :as tool]
-            [bb-mcp.host.port :as hp]))
+            [bb-mcp.host.port :as hp]
+            [bb-mcp.guard :as guard]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -111,6 +112,13 @@
         [(bash-tool)
          (tool/native-tool nrepl/tool-spec nrepl/execute)]))
 
+(def ^:private native-tool-names
+  "Names of the tools this head serves in its OWN process.
+
+   These never reach hive-mcp's tool-dispatch gate, so this process is the only
+   place they can be judged."
+  (into #{} (map tool/tool-name) native-tools))
+
 (def ^:private tool-sources
   "Ordered tool providers; each a zero-arg fn returning a seq of Tool."
   [(constantly native-tools) hive/get-tools])
@@ -148,12 +156,37 @@
        :error? true}
       outcome)))
 
+(defn- guarded-invoke
+  "Invoke `t`, gated when this head serves the tool itself.
+
+   A forwarded tool is judged by hive-mcp's own dispatch gate; judging it here
+   as well would double-count it and pay a second round-trip. Only the native
+   tools — the ones that reach no other gate — are judged here.
+
+     :deny — short-circuits; the tool never runs.
+     :warn — the tool runs and the advisory is appended.
+     else  — proceeds, gap or not."
+  [t name arguments]
+  (if-not (contains? native-tool-names name)
+    (invoke-safely t arguments)
+    (let [decision (guard/decide name (inject-agent-context arguments))]
+      (cond
+        (guard/denied? decision)
+        {:result (guard/refusal-text name decision) :error? true}
+
+        (guard/warned? decision)
+        (let [{:keys [result error?]} (invoke-safely t arguments)]
+          {:result (str result "\n\n" (guard/warning-text decision))
+           :error? error?})
+
+        :else (invoke-safely t arguments)))))
+
 (defn- call-tool
   "Resolve, invoke, log, and build the tools/call response for `name`."
   [id name arguments]
   (let [t0 (System/currentTimeMillis)]
     (if-let [t (find-tool name)]
-      (let [{:keys [result error?]} (invoke-safely t arguments)
+      (let [{:keys [result error?]} (guarded-invoke t name arguments)
             response (proto/tool-call-response id result error?)]
         (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
         response)
