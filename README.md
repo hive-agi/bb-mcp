@@ -11,6 +11,15 @@
 
 Lightweight MCP (Model Context Protocol) server in Babashka that bridges Claude Code to Emacs via nREPL.
 
+## OpenClaw ACP
+
+`bb-mcp.acp` is a portable `.cljc` JSON-RPC client for OpenClaw's ACP
+methods: `initialize`, `session/new`, `session/load`, `session/prompt`, and
+`session/cancel`. It accepts an injected `exchange!` function, so the same
+message layer works over bb-mcp stdio, the cljw TCP adapter, JVM sockets, or a
+ClojureScript transport. `hive-claw` should consume this seam instead of
+inventing a second ACP wire format.
+
 ## Why bb-mcp?
 
 **The Problem:** Running multiple Claude Code instances (e.g., swarm agents) each with their own JVM-based MCP server consumes massive resources.

@@ -1,6 +1,7 @@
 (ns bb-mcp.test-runner
   "Test runner for bb-mcp."
   (:require [clojure.test :as test]
+            [bb-mcp.acp-test]
             [bb-mcp.tool-test]
             [bb-mcp.tools.dynamic-test]
             [bb-mcp.wire.bencode-test]
@@ -15,6 +16,7 @@
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
   ['bb-mcp.tool-test
+   'bb-mcp.acp-test
    'bb-mcp.tools.dynamic-test
    'bb-mcp.wire.bencode-test
    'bb-mcp.wire.bencode-props-test
