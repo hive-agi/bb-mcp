@@ -8,7 +8,8 @@
             [clojure.string :as str]
             [bb-mcp.tool :as tool]
             [bb-mcp.host.port :as hp]
-            [bb-mcp.guard :as guard]))
+            [bb-mcp.guard :as guard]
+            [bb-mcp.piggyback :as piggyback]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -156,30 +157,48 @@
        :error? true}
       outcome)))
 
+(def ^:dynamic *drain-fn*
+  "(fn [tool-name args] -> text) giving the piggyback blocks a native tool's
+   response carries. Rebound by tests; `BB_MCP_NATIVE_PIGGYBACK=0` turns it
+   off."
+  (if (= "0" (System/getenv "BB_MCP_NATIVE_PIGGYBACK"))
+    (constantly "")
+    piggyback/drain))
+
+(defn- judged-invoke
+  "The guard's verdict applied to one native call."
+  [t name arguments]
+  (let [decision (guard/decide name (inject-agent-context arguments))]
+    (cond
+      (guard/denied? decision)
+      {:result (guard/refusal-text name decision) :error? true}
+
+      (guard/warned? decision)
+      (let [{:keys [result error?]} (invoke-safely t arguments)]
+        {:result (str result "\n\n" (guard/warning-text decision))
+         :error? error?})
+
+      :else (invoke-safely t arguments))))
+
 (defn- guarded-invoke
-  "Invoke `t`, gated when this head serves the tool itself.
+  "Invoke `t`, gated and piggybacked when this head serves the tool itself.
 
-   A forwarded tool is judged by hive-mcp's own dispatch gate; judging it here
-   as well would double-count it and pay a second round-trip. Only the native
-   tools — the ones that reach no other gate — are judged here.
+   A forwarded tool is judged by hive-mcp's own dispatch gate and gets its
+   piggyback blocks from hive-mcp's middleware; doing either here as well
+   would double-count it. Only the native tools, which reach neither, are
+   judged and drained here.
 
-     :deny — short-circuits; the tool never runs.
-     :warn — the tool runs and the advisory is appended.
-     else  — proceeds, gap or not."
+     :deny: short-circuits; the tool never runs.
+     :warn: the tool runs and the advisory is appended.
+     else:  proceeds, gap or not.
+
+   Blocks are appended on every outcome, a refusal included, as hive-mcp does."
   [t name arguments]
   (if-not (contains? native-tool-names name)
     (invoke-safely t arguments)
-    (let [decision (guard/decide name (inject-agent-context arguments))]
-      (cond
-        (guard/denied? decision)
-        {:result (guard/refusal-text name decision) :error? true}
-
-        (guard/warned? decision)
-        (let [{:keys [result error?]} (invoke-safely t arguments)]
-          {:result (str result "\n\n" (guard/warning-text decision))
-           :error? error?})
-
-        :else (invoke-safely t arguments)))))
+    (let [outcome (judged-invoke t name arguments)]
+      (update outcome :result
+              #(piggyback/append (str %) (*drain-fn* name (inject-agent-context arguments)))))))
 
 (defn- call-tool
   "Resolve, invoke, log, and build the tools/call response for `name`."

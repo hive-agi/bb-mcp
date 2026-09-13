@@ -11,7 +11,8 @@
             [bb-mcp.wire.bencode-mutation-test]
             [bb-mcp.host.json-props-test]
             [bb-mcp.tools.bash.remote-test]
-            [bb-mcp.guard-test]))
+            [bb-mcp.guard-test]
+            [bb-mcp.piggyback-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -25,6 +26,7 @@
    'bb-mcp.host.json-props-test
    'bb-mcp.core-test
    'bb-mcp.guard-test
+   'bb-mcp.piggyback-test
    'bb-mcp.tools.bash.remote-test])
 
 (def ^:private host-suites
