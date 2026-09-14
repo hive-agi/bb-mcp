@@ -47,6 +47,11 @@
   (.join t (long grace-ms))
   [(.toString sb) (not (.isAlive t))])
 
+(defn- detached?
+  "Returns true when at least one drain did not complete within the grace period."
+  [out-done? err-done?]
+  (not (and out-done? err-done?)))
+
 (defn execute
   "Execute a bash command and return the result.
 
@@ -81,7 +86,7 @@
             exit (if finished? (.exitValue handle) -1)
             [stdout out-done?] (collected out flush-grace-ms)
             [stderr err-done?] (collected err flush-grace-ms)
-            detached? (not (and out-done? err-done?))]
+            cut-short? (detached? out-done? err-done?)]
         (cond-> {:exit-code (if timed-out? -1 exit)
                  :stdout stdout
                  :stderr (if timed-out?
@@ -89,7 +94,7 @@
                                 "Command timed out")
                            stderr)
                  :timed-out timed-out?}
-          detached? (assoc :detached true)))
+          cut-short? (assoc :detached true)))
       (catch Exception e
         {:exit-code -1
          :stdout ""
