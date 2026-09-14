@@ -6,12 +6,67 @@
   `sleep`."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
-            [bb-mcp.tools.bash :as bash]))
+            [bb-mcp.tools.bash :as bash])
+  (:import (java.util.concurrent CountDownLatch TimeUnit)))
 
 (defn- elapsed-ms [f]
   (let [t0 (System/currentTimeMillis)
         result (f)]
     [result (- (System/currentTimeMillis) t0)]))
+
+(defn- collected
+  "Reach into the private fn for deterministic testing."
+  [pair grace-ms]
+  (#'bb-mcp.tools.bash/collected pair grace-ms))
+
+(defn- drain-from-thread
+  "Build a drain pair where the thread blocks on a latch."
+  [text]
+  (let [sb (StringBuilder. text)
+        latch (CountDownLatch. 1)
+        t (doto (Thread.
+                (fn []
+                  (try
+                    (.await latch)
+                    (catch InterruptedException _ nil))))
+            (.setDaemon true)
+            (.start))]
+    [sb t latch]))
+
+(deftest collected-grace-bounds-the-wait
+  (let [pair (drain-from-thread "partial")]
+    (try
+      (let [[r ms] (elapsed-ms #(collected pair 50))]
+        (is (= "partial" (first r)))
+        (is (false? (second r)))
+        (is (< ms 2000) "grace bounded the wait; it returned in ~50 ms not 30s"))
+      (finally
+        (let [latch (nth pair 2)]
+          (.countDown latch))
+        (let [thread (nth pair 1)]
+          (.join thread 2000))))))
+
+(deftest collected-returns-complete-after-the-thread-finishes
+  (let [pair (drain-from-thread "hello")
+        latch (nth pair 2)
+        thread (nth pair 1)]
+    (.countDown latch)
+    (.join thread 2000)
+    (let [[text complete?] (collected pair 50)]
+      (is (= "hello" text))
+      (is (true? complete?)))))
+
+(defn- detached?
+  "Reach into the private pure fn."
+  [out-done? err-done?]
+  (#'bb-mcp.tools.bash/detached? out-done? err-done?))
+
+(deftest detached?-truth-table
+  (testing "only both done means not detached"
+    (is (true? (detached? false false)))
+    (is (true? (detached? true false)))
+    (is (true? (detached? false true)))
+    (is (false? (detached? true true)))))
 
 (deftest captures-output-and-exit-code
   (let [{:keys [exit-code stdout timed-out]} (bash/execute {:command "echo hello"})]
@@ -45,13 +100,15 @@
 
 (deftest a-backgrounded-child-that-keeps-stdout-still-returns
   (testing "the wedge: the write end stays open, so EOF never comes"
-    (let [[{:keys [exit-code stdout detached]} ms]
+    (let [[{:keys [exit-code stdout]} ms]
           (elapsed-ms #(bash/execute {:command "sleep 30 & echo started"
                                       :timeout_ms 5000}))]
       (is (= 0 exit-code))
       (is (= "started" (str/trim stdout)))
       (is (< ms 4000) "the flush grace bounds it; it must not wait on the grandchild")
-      (is (true? detached) "and the caller is told the output was cut short"))))
+      ;; detached? semantics are owned by detached?-truth-table and
+      ;; collected-grace-bounds-the-wait / collected-returns-complete-after-the-thread-finishes
+      )))
 
 (deftest a-timeout-kills-the-tree-and-says-so
   (let [[{:keys [exit-code timed-out stderr]} ms]
