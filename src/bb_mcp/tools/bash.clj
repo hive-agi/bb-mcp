@@ -86,7 +86,7 @@
             exit (if finished? (.exitValue handle) -1)
             [stdout out-done?] (collected out flush-grace-ms)
             [stderr err-done?] (collected err flush-grace-ms)
-            detached? (detached? out-done? err-done?)]
+            cut-short? (detached? out-done? err-done?)]
         (cond-> {:exit-code (if timed-out? -1 exit)
                  :stdout stdout
                  :stderr (if timed-out?
@@ -94,7 +94,7 @@
                                 "Command timed out")
                            stderr)
                  :timed-out timed-out?}
-          detached? (assoc :detached true)))
+          cut-short? (assoc :detached true)))
       (catch Exception e
         {:exit-code -1
          :stdout ""
