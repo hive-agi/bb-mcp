@@ -12,13 +12,15 @@
             [bb-mcp.host.json-props-test]
             [bb-mcp.tools.bash.remote-test]
             [bb-mcp.guard-test]
-            [bb-mcp.piggyback-test]))
+            [bb-mcp.piggyback-test]
+            [bb-mcp.tools.hive.compact-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
   ['bb-mcp.tool-test
    'bb-mcp.acp-test
    'bb-mcp.tools.dynamic-test
+   'bb-mcp.tools.hive.compact-test
    'bb-mcp.wire.bencode-test
    'bb-mcp.wire.bencode-props-test
    'bb-mcp.wire.bencode-mutation-test

@@ -8,6 +8,8 @@
 #   BB_MCP_NREPL_PORT  - nREPL port (default: from .nrepl-port or $2)
 #   HIVE_MCP_DIR      - Path to hive-mcp/hive-mcp (required for auto-spawn)
 #   BB_MCP_RUNTIME    - cljw (default) or bb
+#   BB_MCP_TOOL_SCHEMA - full (default) or compact: advertise only each tool's core
+#                        parameters and keep the rest accepted (bb-mcp.tools.hive.compact)
 #   CLJW_BIN          - cljw binary (default: config.edn :runtimes :cljw :binary, then PATH)
 #   EMACS_SOCKET_NAME - Emacs daemon socket name for isolation (optional)
 

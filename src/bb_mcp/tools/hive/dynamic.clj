@@ -11,7 +11,8 @@
    4. Cache tools in atom for session lifetime"
   (:require [bb-mcp.tools.nrepl :as nrepl]
             [clojure.edn :as edn]
-            [bb-mcp.tool :as tool]))
+            [bb-mcp.tool :as tool]
+            [bb-mcp.tools.hive.compact :as compact]))
 
 (defonce ^:private tool-cache (atom nil))
 
@@ -60,17 +61,24 @@
    Returns raw tool data or nil on failure.
 
    hive-mcp tools are flat: {:name, :description, :inputSchema, :handler}
-   We extract just the spec fields (not handler)."
+   We extract just the spec fields (not handler). :core-schema is the tool's
+   own pre-extension inputSchema (registry/get-consolidated-tools), which the
+   compact schema mode advertises in place of the merged one."
   [{:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
   (let [code (pr-str
               '(pr-str
-                (mapv (fn [t]
-                        {:name (:name t)
-                         :description (:description t)
-                         :schema (:inputSchema t)
-                         :deprecated (boolean (:deprecated t))})
-                      ((requiring-resolve
-                        'hive-mcp.tools.registry/get-advertised-tools)))))]
+                (let [core (into {}
+                                 (map (juxt :name :inputSchema))
+                                 ((requiring-resolve
+                                   'hive-mcp.tools.registry/get-consolidated-tools)))]
+                  (mapv (fn [t]
+                          {:name (:name t)
+                           :description (:description t)
+                           :schema (:inputSchema t)
+                           :deprecated (boolean (:deprecated t))
+                           :core-schema (get core (:name t))})
+                        ((requiring-resolve
+                          'hive-mcp.tools.registry/get-advertised-tools))))))]
     (try
       (let [result (nrepl/eval-code {:port port
                                      :code code
@@ -186,15 +194,21 @@
          :error? (:error? resp)}))))
 
 (defn- transform-tool
-  "Transform a hive-mcp tool spec into a ForwardingTool."
-  [{:keys [name description schema deprecated]}]
+  "Transform a hive-mcp tool spec into a ForwardingTool.
+
+   Under BB_MCP_TOOL_SCHEMA=compact the advertised schema is first reduced to
+   the tool's core parameters (compact/compact-tool); forwarding is unchanged."
+  [{:keys [name description schema deprecated core-schema]}]
   (let [base-schema (or schema {:type "object" :properties {} :required []})
-        [schema' rename] (sanitize-schema base-schema)]
+        advertised  (cond-> {:schema base-schema :description description}
+                      (compact/compact? (System/getenv "BB_MCP_TOOL_SCHEMA"))
+                      (compact/compact-tool core-schema))
+        [schema' rename] (sanitize-schema (:schema advertised))]
     (when (seq rename)
       (binding [*out* *err*]
         (println "[dynamic] sanitized property keys for" name "->" rename)))
     (tool/forwarding-tool {:name name
-                           :description description
+                           :description (:description advertised)
                            :schema schema'}
                           (make-forwarding-handler name rename)
                           deprecated)))
