@@ -111,7 +111,12 @@ bb-mcp finds the nREPL port in this order:
 |----------|-------------|---------|
 | `BB_MCP_NREPL_PORT` | nREPL port to connect to | 7910 |
 | `BB_MCP_PROJECT_DIR` | Directory for .nrepl-port lookup | Current dir |
-| `HIVE_MCP_DIR` | hive-mcp directory for auto-spawn | ~/dotfiles/gitthings/hive-mcp |
+
+bb-mcp is a **client**: it connects to an nREPL the hive-mcp coordinator is
+already serving, and it does not spawn or respawn one. When the coordinator is
+down, every tool call fails with `could not connect to 'localhost:7910'` until
+the coordinator is started by hand. That message means the coordinator, not the
+arguments of the call that reported it.
 
 ## Tools
 
