@@ -1,0 +1,93 @@
+name: staging-gate
+
+# staging is a GATE, not a mirror: a push to staging runs the suite against the
+# DECLARED classpath (no local.deps.edn), and only a green staging is promoted
+# to main, where release.yml mints the version. This workflow never publishes.
+#
+# Runs unchanged on GitHub Actions and Gitea Actions: the Clojure CLI comes from
+# the official installer, not DeLaGuardo/setup-clojure, whose GitHub API call
+# fails under Gitea's GITHUB_TOKEN.
+#
+# Secrets (optional): MAVEN_USERNAME, MAVEN_TOKEN, for deps served only by the
+# private hive-gitea registry.
+
+on:
+  push:
+    branches: [staging]
+  workflow_dispatch:
+
+concurrency:
+  group: staging-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
+      MAVEN_TOKEN: ${{ secrets.MAVEN_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Setup Clojure CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/clj-install.sh \
+            https://download.clojure.org/install/linux-install-1.12.4.1618.sh
+          chmod +x /tmp/clj-install.sh
+          sudo /tmp/clj-install.sh
+          clojure --version
+
+      - name: Private-registry credentials
+        if: env.MAVEN_TOKEN != ''
+        run: |
+          CLJ_CONFIG="${CLJ_CONFIG:-${XDG_CONFIG_HOME:+$XDG_CONFIG_HOME/clojure}}"
+          CLJ_CONFIG="${CLJ_CONFIG:-$HOME/.clojure}"
+          mkdir -p "$CLJ_CONFIG" "$HOME/.m2"
+          cat > "$CLJ_CONFIG/deps.edn" <<'EOF'
+          {:mvn/repos {"hive-gitea" {:url "https://gitea.hive-mcp.com/api/packages/hive-agi/maven"}}}
+          EOF
+          cat > "$HOME/.m2/settings.xml" <<EOF
+          <settings><servers><server>
+            <id>hive-gitea</id>
+            <username>${MAVEN_USERNAME}</username>
+            <password>${MAVEN_TOKEN}</password>
+          </server></servers></settings>
+          EOF
+
+      # The pins must resolve from the registries before anything else is
+      # worth running: this is the step a dependency sweep can break.
+      - name: Resolve declared classpath
+        run: clojure -P
+
+      - name: Test
+        run: |
+          set -euo pipefail
+          mode=$(clojure -M -e '(let [a (get-in (clojure.edn/read-string (slurp "deps.edn")) [:aliases :test])] (print (cond (:main-opts a) "main" (:exec-fn a) "exec" a "paths" :else "none")))')
+          case "$mode" in
+            main) clojure -M:test ;;
+            exec) clojure -X:test ;;
+            # A :test alias that only adds paths: run it under cognitect's runner.
+            paths) clojure -Sdeps '{:deps {io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}}' -M:test -m cognitect.test-runner ;;
+            *)
+              if [ -f bb.edn ] && grep -qE '^\s*test\s' bb.edn; then
+                curl -fsSL -o /tmp/bb-install https://raw.githubusercontent.com/babashka/babashka/master/install
+                sudo bash /tmp/bb-install
+                bb test
+              else
+                echo "no runnable :test alias or bb test task; declared classpath resolved"
+              fi ;;
+          esac
