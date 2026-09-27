@@ -93,7 +93,7 @@
                      (when (seq @inbox)
                        (let [m (first @inbox)] (swap! inbox rest) m)))
                    (write-msg [_ m] (swap! outbox conj m)))]
-      (core/run-server t {:select-receptor receptor/null-receptor})
+      (core/run-server t {:select-receptor (fn [_init] (receptor/null-receptor))})
       (is (= [(proto/initialize-response 1)
               (proto/json-rpc-response 2 {:prompts []})]
              @outbox)))))

@@ -98,13 +98,6 @@
     (print line)
     (flush)))
 
-(defn send-notification
-  "Send a JSON-RPC notification (no id, no response expected)."
-  [method params]
-  (write-message {:jsonrpc "2.0"
-                  :method method
-                  :params params}))
-
 ;; Transport — the effectful message boundary
 
 (defprotocol Transport

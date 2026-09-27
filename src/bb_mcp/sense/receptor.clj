@@ -5,7 +5,8 @@
 
      SenseFeed  where senses come from. `nrepl-feed` asks the hive JVM over the
                 nREPL link this head already holds; a test passes a stub.
-     Receptor   what a SESSION does with them. Chosen once, at `initialize`:
+     Receptor   what a SESSION does with them. Chosen at `initialize`, from
+                the initialize request and the environment (opt-in):
                   `channel-receptor` declares claude/channel and runs a
                                      background loop that writes one
                                      notifications/claude/channel per sense;
@@ -32,7 +33,7 @@
   "A source of senses addressed by cursor."
   (drain! [feed cursor receptor]
     "Senses after `cursor` for `receptor`, as a `bb-mcp.sense.core` outcome:
-     {:outcome :ok :senses [...] :cursor n} | {:outcome :absent}
+     {:outcome :ok :senses [...] :cursor n :epoch id-or-nil} | {:outcome :absent}
      | {:outcome :failed :detail s}. Must not throw."))
 
 (def ^:private drain-timeout-ms
@@ -114,7 +115,9 @@
       (let [outcome (drain! feed (:cursor state) receptor-spec)
             {:keys [state deliver log sleep-ms]} (sense/advance state outcome policy)]
         (run! log-fn log)
-        (if (deliver! transport deliver log-fn)
+        ;; Disarmed while the drain was in flight: deliver nothing more, so a
+        ;; replaced session's poller never writes after its successor started.
+        (if (and @running (deliver! transport deliver log-fn))
           (do (nap! running sleep-ms sleep-fn)
               (recur state))
           (do (reset! running false) state))))))
@@ -130,7 +133,7 @@
    (let [running (atom false)
          worker (atom nil)
          cfg {:feed (or feed (nrepl-feed))
-              :receptor-spec (or receptor-spec {:receptor/parent "coordinator"})
+              :receptor-spec (or receptor-spec {})
               :policy (or policy sense/default-policy)
               :log-fn (or log-fn stderr-log)
               :sleep-fn (or sleep-fn #(Thread/sleep (long %)))
@@ -151,10 +154,12 @@
          r)))))
 
 (defn select
-  "The receptor for this session, from `env` (a map of environment strings):
-   a channel receptor unless BB_MCP_CHANNELS turns channels off."
-  [env]
-  (if (sense/channels-enabled? env)
+  "The receptor for the session `init-request` opens, given `env` (a map of
+   environment strings). Channels are OPT-IN (`sense/channels-wanted?`): a
+   channel receptor only when the client declares it listens or
+   BB_MCP_CHANNELS=1; otherwise the null receptor, which never polls."
+  [env init-request]
+  (if (sense/channels-wanted? env init-request)
     (channel-receptor {:receptor-spec (sense/receptor-spec env)
                        :policy (sense/policy-from env)})
     (null-receptor)))

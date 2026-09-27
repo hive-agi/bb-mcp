@@ -215,8 +215,11 @@
 ;; Message handlers
 (defmulti handle-method :method)
 
-(defmethod handle-method "initialize" [{:keys [id]}]
-  (proto/initialize-response id))
+(defmethod handle-method "initialize"
+  ;; THE initialize response. `:session/capabilities` is what this session's
+  ;; receptor adds (run-server attaches it); absent, the base set alone.
+  [{:keys [id] :session/keys [capabilities]}]
+  (proto/initialize-response id (or capabilities {})))
 
 (defmethod handle-method "initialized" [_]
   nil) ;; Notification, no response
@@ -242,36 +245,44 @@
 ;; Main loop
 
 (defn- env-receptor
-  "The receptor this process's environment asks for (BB_MCP_CHANNELS)."
-  []
-  (receptor/select (into {} (System/getenv))))
+  "The receptor for the session `init-request` opens, from that request and
+   this process's environment (channels are opt-in: see receptor/select)."
+  [init-request]
+  (receptor/select (into {} (System/getenv)) init-request))
 
-(defn- respond
-  "The response to `msg` in a session whose receptor is `r`. Only `initialize`
-   depends on the session: it advertises what the receptor adds."
+(defn- in-session
+  "`msg` as the session with receptor `r` sees it: carrying the capabilities
+   the receptor adds, for the methods whose answer depends on the session."
   [r msg]
-  (if (= "initialize" (:method msg))
-    (proto/initialize-response (:id msg) (receptor/capabilities r))
-    (handle-method msg)))
+  (assoc msg :session/capabilities (receptor/capabilities r)))
+
+(defn- open-session
+  "The receptor for a new session opened by `init-request`. The previous
+   session's receptor `r` is disarmed FIRST, so a repeated initialize never
+   leaves two pollers running."
+  [r select-receptor init-request]
+  (receptor/disarm! r)
+  (select-receptor init-request))
 
 (defn run-server
   "Read, dispatch, and write MCP messages over `transport` until input ends.
 
    The session's Receptor is chosen when `initialize` arrives (via
-   `:select-receptor`, default: from the environment) and armed on the first
-   message AFTER it, i.e. once the handshake is done, so no channel event can
-   precede the initialize result. It is disarmed when input ends. Every write,
-   response or notification, goes through one serialised transport."
+   `:select-receptor`, a fn of the initialize request; default: from that
+   request and the environment) after disarming the one before, and armed on
+   the first message AFTER it, i.e. once the handshake is done, so no channel
+   event can precede the initialize result. It is disarmed when input ends.
+   Every write, response or notification, goes through one serialised
+   transport."
   ([] (run-server (proto/stdio-transport)))
   ([transport] (run-server transport {}))
   ([transport {:keys [select-receptor] :or {select-receptor env-receptor}}]
-   (let [t (proto/serialized transport)
-         none (receptor/null-receptor)]
-     (loop [r none]
+   (let [t (proto/serialized transport)]
+     (loop [r (receptor/null-receptor)]
        (if-let [msg (proto/read-msg t)]
          (let [initialize? (= "initialize" (:method msg))
-               r (if initialize? (select-receptor) r)]
-           (when-let [response (respond r msg)]
+               r (if initialize? (open-session r select-receptor msg) r)]
+           (when-let [response (handle-method (in-session r msg))]
              (proto/write-msg t response))
            (when-not initialize? (receptor/arm! r t))
            (recur r))

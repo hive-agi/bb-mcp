@@ -50,8 +50,10 @@
         feed (scripted-feed script asked)
         counted (reify receptor/SenseFeed
                   (drain! [_ c r]
-                    (when (>= (inc (count @asked)) turns) (reset! running false))
-                    (receptor/drain! feed c r)))]
+                    (if (< (count @asked) turns)
+                      (receptor/drain! feed c r)
+                      ;; one drain past the script: stop, deliver nothing
+                      (do (reset! running false) {:outcome :ok :senses [] :cursor c}))))]
     (receptor/run-loop! {:feed counted
                          :transport (recording-transport outbox)
                          :receptor-spec {:receptor/parent "coordinator"}
@@ -79,12 +81,30 @@
   (is (= (proto/initialize-response 1)
          (proto/initialize-response 1 (receptor/capabilities (receptor/null-receptor))))))
 
-(deftest selection-follows-BB_MCP_CHANNELS
-  (testing "on by default"
-    (is (= sense/channel-capability (receptor/capabilities (receptor/select {})))))
-  (testing "explicitly off"
-    (doseq [v ["0" "false" "off" "NO"]]
-      (is (= {} (receptor/capabilities (receptor/select {"BB_MCP_CHANNELS" v}))) v))))
+(deftest selection-is-opt-in
+  (testing "off by default: no env, a plain initialize"
+    (is (= {} (receptor/capabilities (receptor/select {} {:method "initialize" :params {}}))))
+    (is (= {} (receptor/capabilities (receptor/select {} nil)))))
+  (testing "BB_MCP_CHANNELS turns it on"
+    (doseq [v ["1" "true" "ON" " yes "]]
+      (is (= sense/channel-capability
+             (receptor/capabilities (receptor/select {"BB_MCP_CHANNELS" v} {:method "initialize"})))
+          v)))
+  (testing "anything else leaves it off"
+    (doseq [v ["0" "false" "off" "" "maybe"]]
+      (is (= {} (receptor/capabilities (receptor/select {"BB_MCP_CHANNELS" v} {:method "initialize"}))) v)))
+  (testing "a client whose initialize declares claude/channel is served without configuration"
+    (doseq [exp [{:claude/channel {}} {"claude/channel" {}}]]
+      (is (= sense/channel-capability
+             (receptor/capabilities
+              (receptor/select {} {:method "initialize" :params {:capabilities {:experimental exp}}})))))
+    (testing "as decoded from the wire"
+      (is (sense/client-listens?
+           (hp/json-decode "{\"method\":\"initialize\",\"params\":{\"capabilities\":{\"experimental\":{\"claude/channel\":{}}}}}")))))
+  (testing "what Claude Code 2.1.x actually sends does not arm it"
+    (is (not (sense/client-listens?
+              {:method "initialize"
+               :params {:capabilities {:roots {:listChanged true} :elicitation {}}}})))))
 
 (deftest run-server-advertises-the-chosen-receptor
   (testing "the initialize result carries the receptor's capability; the receptor is armed only after the handshake"
@@ -102,7 +122,48 @@
       (core/run-server t {:select-receptor (constantly r)})
       (is (= [(proto/initialize-response 1 sense/channel-capability)] @outbox))
       (is (= [[:arm 1] :disarm] @events)
-          "armed once the initialize result is out, disarmed at end of input"))))
+          "armed once the initialize result is out, disarmed at end of input")))
+  (testing "select-receptor is handed the initialize request itself"
+    (let [seen (atom nil)
+          init {:jsonrpc "2.0" :id 1 :method "initialize" :params {:capabilities {:roots {}}}}
+          inbox (atom [init])
+          t (reify proto/Transport
+              (read-msg [_] (when-let [m (first @inbox)] (swap! inbox rest) m))
+              (write-msg [_ _]))]
+      (core/run-server t {:select-receptor (fn [req] (reset! seen req) (receptor/null-receptor))})
+      (is (= init @seen)))))
+
+(deftest a-second-initialize-disarms-the-first-receptor
+  (let [events (atom [])
+        made (atom 0)
+        mk (fn [_]
+             (let [n (swap! made inc)]
+               (reify receptor/Receptor
+                 (capabilities [_] sense/channel-capability)
+                 (arm! [this _] (swap! events conj [:arm n]) this)
+                 (disarm! [this] (swap! events conj [:disarm n]) this))))
+        inbox (atom [{:jsonrpc "2.0" :id 1 :method "initialize"}
+                     {:jsonrpc "2.0" :method "notifications/initialized"}
+                     {:jsonrpc "2.0" :id 2 :method "initialize"}
+                     {:jsonrpc "2.0" :method "notifications/initialized"}])
+        outbox (atom [])
+        t (reify proto/Transport
+            (read-msg [_] (when-let [m (first @inbox)] (swap! inbox rest) m))
+            (write-msg [_ m] (swap! outbox conj m)))]
+    (core/run-server t {:select-receptor mk})
+    (is (= [[:arm 1] [:disarm 1] [:arm 2] [:disarm 2]] @events)
+        "the first poller is stopped before the second session's is chosen")
+    (is (= [(proto/initialize-response 1 sense/channel-capability)
+            (proto/initialize-response 2 sense/channel-capability)]
+           @outbox))))
+
+(deftest initialize-has-one-source
+  (testing "handle-method answers initialize from the session capabilities it is given"
+    (is (= (proto/initialize-response 4)
+           (core/handle-method {:method "initialize" :id 4})))
+    (is (= (proto/initialize-response 4 sense/channel-capability)
+           (core/handle-method {:method "initialize" :id 4
+                                :session/capabilities sense/channel-capability})))))
 
 ;;; ===========================================================================
 ;;; Pure: sense -> notification
@@ -154,9 +215,23 @@
   (is (= :failed (:outcome (sense/read-drain-reply {:error? false :result "{:unbalanced"}))))
   (is (= :failed (:outcome (sense/read-drain-reply (nrepl-says [:not :a :map]))))))
 
+(deftest drain-reply-carries-the-epoch
+  (is (= {:outcome :ok :senses [] :cursor 3 :epoch "e-1"}
+         (sense/read-drain-reply (nrepl-says {:senses [] :cursor 3 :epoch "e-1"}))))
+  (is (= {:outcome :ok :senses [] :cursor 3}
+         (sense/read-drain-reply (nrepl-says {:senses [] :cursor 3})))
+      "an older hive-agent sends no epoch"))
+
+(deftest drain-form-never-loads-code
+  (let [code (sense/drain-form 0 {})]
+    (is (not (str/includes? code "require")) "no require / requiring-resolve from a poller")
+    (is (str/includes? code "find-ns"))
+    (is (str/includes? code "ns-resolve"))))
+
 (deftest drain-form-quotes-its-inputs
   (let [code (sense/drain-form 42 {:receptor/parent "coordinator"})]
-    (is (str/includes? code "hive-agent.sixth-sense.api/drain"))
+    (is (str/includes? code "(quote hive-agent.sixth-sense.api)"))
+    (is (str/includes? code "(quote drain)"))
     (is (str/includes? code "(quote 42)"))
     (is (str/includes? code "(quote #:receptor{:parent \"coordinator\"})")
         "receptor is data in the JVM, never evaluated")))
@@ -204,6 +279,45 @@
     (is (= [0 50 0] asked) "a cursor that went backwards means a new sense log")
     (is (= [(sense/sense->notification done)] sent))
     (is (some #(str/includes? % "restarted") logs))))
+
+(deftest an-epoch-change-rereads-even-when-the-new-log-is-longer
+  (testing "the hive restarted and its new log grew PAST the old cursor before the next poll"
+    (let [{:keys [sent asked logs]}
+          (run-script [{:outcome :ok :senses [] :cursor 5 :epoch "A"}
+                       {:outcome :ok :senses [ask] :cursor 9 :epoch "B"}
+                       {:outcome :ok :senses [ask done] :cursor 9 :epoch "B"}]
+                      3)]
+      (is (= [0 5 0] asked) "the cursor from log A is never used against log B")
+      (is (= [(sense/sense->notification ask) (sense/sense->notification done)] sent)
+          "the senses read against the stale cursor are discarded; log B is read whole")
+      (is (some #(str/includes? % "restarted") logs)))))
+
+(deftest epoch-rules
+  (let [s (assoc (sense/initial-state sense/default-policy) :cursor 5 :epoch "A" :primed? true)]
+    (is (false? (sense/log-restarted? s {:cursor 7 :epoch "A"})))
+    (is (true? (sense/log-restarted? s {:cursor 7 :epoch "B"})))
+    (testing "an older hive sends no epoch: only a backwards cursor tells"
+      (is (false? (sense/log-restarted? s {:cursor 7 :epoch nil})))
+      (is (true? (sense/log-restarted? s {:cursor 2 :epoch nil}))))
+    (testing "the first epoch seen is adopted, not treated as a restart"
+      (is (false? (sense/log-restarted? (assoc s :epoch nil) {:cursor 7 :epoch "A"})))
+      (is (= "A" (get-in (sense/advance (assoc s :epoch nil) {:outcome :ok :senses [] :cursor 7 :epoch "A"}
+                                        sense/default-policy)
+                         [:state :epoch]))))))
+
+(deftest a-disarmed-loop-delivers-nothing-more
+  (let [running (atom true) outbox (atom [])
+        state (receptor/run-loop!
+               {:feed (reify receptor/SenseFeed
+                        (drain! [_ c _]
+                          (reset! running false) ; disarmed while this drain is in flight
+                          {:outcome :ok :senses [ask] :cursor (inc c)}))
+                :transport (recording-transport outbox)
+                :receptor-spec {}
+                :policy (assoc sense/default-policy :prime? false)
+                :log-fn (fn [_]) :sleep-fn (fn [_]) :running running})]
+    (is (empty? @outbox))
+    (is (= 1 (:cursor state)))))
 
 ;;; ===========================================================================
 ;;; Loop: absent drain fn, unreachable hive, backoff
@@ -320,11 +434,14 @@
 ;;; ===========================================================================
 
 (deftest receptor-spec-from-env
-  (is (= {:receptor/parent "coordinator"} (sense/receptor-spec {})))
+  (is (= {} (sense/receptor-spec {})) "no session claims to be the coordinator by default")
+  (is (= {} (sense/receptor-spec {"BB_MCP_SENSE_PARENT" "  "})))
   (is (= {:receptor/parent "ling-1"} (sense/receptor-spec {"CLAUDE_SWARM_SLAVE_ID" "ling-1"})))
+  (is (= {:receptor/parent "coordinator"} (sense/receptor-spec {"BB_MCP_SENSE_PARENT" "coordinator"})))
   (is (= {:receptor/parent "me" :receptor/projects #{"hive" "bb-mcp"}
           :receptor/classes #{:sense/ask :sense/blocked}}
          (sense/receptor-spec {"BB_MCP_SENSE_PARENT" "me"
+                               "CLAUDE_SWARM_SLAVE_ID" "ling-1"
                                "BB_MCP_SENSE_PROJECTS" "hive, bb-mcp"
                                "BB_MCP_SENSE_CLASSES" "ask,blocked"}))))
 
