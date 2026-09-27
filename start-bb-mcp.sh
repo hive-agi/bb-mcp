@@ -11,6 +11,12 @@
 #                        parameters and keep the rest accepted (bb-mcp.tools.hive.compact)
 #   CLJW_BIN          - cljw binary (default: config.edn :runtimes :cljw :binary, then PATH)
 #   EMACS_SOCKET_NAME - Emacs daemon socket name for isolation (optional)
+#   BB_MCP_CHANNELS   - 1 to arm the sixth-sense channel receptor (opt-in; off by
+#                       default, so the session never polls the hive JVM). Pair
+#                       with `claude --dangerously-load-development-channels server:<name>`
+#   BB_MCP_SENSE_PARENT   - receptor parent filter (default: CLAUDE_SWARM_SLAVE_ID, else none)
+#   BB_MCP_SENSE_PROJECTS / BB_MCP_SENSE_CLASSES - comma lists narrowing the senses
+#   BB_MCP_SENSE_POLL_MS  - poll interval (default 1000); BB_MCP_SENSE_REPLAY=1 skips priming
 
 set -euo pipefail
 

@@ -9,7 +9,8 @@
             [bb-mcp.tool :as tool]
             [bb-mcp.host.port :as hp]
             [bb-mcp.guard :as guard]
-            [bb-mcp.piggyback :as piggyback]))
+            [bb-mcp.piggyback :as piggyback]
+            [bb-mcp.sense.receptor :as receptor]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -219,8 +220,11 @@
 ;; Message handlers
 (defmulti handle-method :method)
 
-(defmethod handle-method "initialize" [{:keys [id]}]
-  (proto/initialize-response id))
+(defmethod handle-method "initialize"
+  ;; THE initialize response. `:session/capabilities` is what this session's
+  ;; receptor adds (run-server attaches it); absent, the base set alone.
+  [{:keys [id] :session/keys [capabilities]}]
+  (proto/initialize-response id (or capabilities {})))
 
 (defmethod handle-method "initialized" [_]
   nil) ;; Notification, no response
@@ -244,15 +248,50 @@
     nil)) ;; Ignore unknown notifications
 
 ;; Main loop
+
+(defn- env-receptor
+  "The receptor for the session `init-request` opens, from that request and
+   this process's environment (channels are opt-in: see receptor/select)."
+  [init-request]
+  (receptor/select (into {} (System/getenv)) init-request))
+
+(defn- in-session
+  "`msg` as the session with receptor `r` sees it: carrying the capabilities
+   the receptor adds, for the methods whose answer depends on the session."
+  [r msg]
+  (assoc msg :session/capabilities (receptor/capabilities r)))
+
+(defn- open-session
+  "The receptor for a new session opened by `init-request`. The previous
+   session's receptor `r` is disarmed FIRST, so a repeated initialize never
+   leaves two pollers running."
+  [r select-receptor init-request]
+  (receptor/disarm! r)
+  (select-receptor init-request))
+
 (defn run-server
-  "Read, dispatch, and write MCP messages over `transport` until input ends."
+  "Read, dispatch, and write MCP messages over `transport` until input ends.
+
+   The session's Receptor is chosen when `initialize` arrives (via
+   `:select-receptor`, a fn of the initialize request; default: from that
+   request and the environment) after disarming the one before, and armed on
+   the first message AFTER it, i.e. once the handshake is done, so no channel
+   event can precede the initialize result. It is disarmed when input ends.
+   Every write, response or notification, goes through one serialised
+   transport."
   ([] (run-server (proto/stdio-transport)))
-  ([transport]
-   (loop []
-     (when-let [msg (proto/read-msg transport)]
-       (when-let [response (handle-method msg)]
-         (proto/write-msg transport response))
-       (recur)))))
+  ([transport] (run-server transport {}))
+  ([transport {:keys [select-receptor] :or {select-receptor env-receptor}}]
+   (let [t (proto/serialized transport)]
+     (loop [r (receptor/null-receptor)]
+       (if-let [msg (proto/read-msg t)]
+         (let [initialize? (= "initialize" (:method msg))
+               r (if initialize? (open-session r select-receptor msg) r)]
+           (when-let [response (handle-method (in-session r msg))]
+             (proto/write-msg t response))
+           (when-not initialize? (receptor/arm! r t))
+           (recur r))
+         (receptor/disarm! r))))))
 
 (defn- warn-unless-nrepl-reachable!
   "Print a startup hint to stderr when no nREPL answers on the resolved port.

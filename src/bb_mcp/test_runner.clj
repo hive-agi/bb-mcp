@@ -13,6 +13,7 @@
             [bb-mcp.tools.bash.remote-test]
             [bb-mcp.guard-test]
             [bb-mcp.piggyback-test]
+            [bb-mcp.sense-test]
             [bb-mcp.tools.hive.compact-test]))
 
 (def ^:private portable-suites
@@ -29,6 +30,7 @@
    'bb-mcp.core-test
    'bb-mcp.guard-test
    'bb-mcp.piggyback-test
+   'bb-mcp.sense-test
    'bb-mcp.tools.bash.remote-test])
 
 (def ^:private host-suites
