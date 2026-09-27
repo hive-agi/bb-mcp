@@ -44,10 +44,15 @@
    timestamp 0."
   (hp/session-id))
 
+(defn- getenv [k]
+  (System/getenv k))
+
 (defn- get-agent-id
-  "Get agent ID from CLAUDE_SWARM_SLAVE_ID env var, or nil if not set."
+  "Get agent ID from BB_MCP_AGENT_ID/BB_MCP_CLIENT_ID, CLAUDE_SWARM_SLAVE_ID, or nil if not set."
   []
-  (System/getenv "CLAUDE_SWARM_SLAVE_ID"))
+  (or (getenv "BB_MCP_AGENT_ID")
+      (getenv "BB_MCP_CLIENT_ID")
+      (getenv "CLAUDE_SWARM_SLAVE_ID")))
 
 (def ^:private caller-cwd
   "Working directory of the Claude Code session (the project being worked on).
