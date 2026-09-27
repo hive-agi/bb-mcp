@@ -9,7 +9,8 @@
             [bb-mcp.tool :as tool]
             [bb-mcp.host.port :as hp]
             [bb-mcp.guard :as guard]
-            [bb-mcp.piggyback :as piggyback]))
+            [bb-mcp.piggyback :as piggyback]
+            [bb-mcp.sense.receptor :as receptor]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -239,15 +240,42 @@
     nil)) ;; Ignore unknown notifications
 
 ;; Main loop
+
+(defn- env-receptor
+  "The receptor this process's environment asks for (BB_MCP_CHANNELS)."
+  []
+  (receptor/select (into {} (System/getenv))))
+
+(defn- respond
+  "The response to `msg` in a session whose receptor is `r`. Only `initialize`
+   depends on the session: it advertises what the receptor adds."
+  [r msg]
+  (if (= "initialize" (:method msg))
+    (proto/initialize-response (:id msg) (receptor/capabilities r))
+    (handle-method msg)))
+
 (defn run-server
-  "Read, dispatch, and write MCP messages over `transport` until input ends."
+  "Read, dispatch, and write MCP messages over `transport` until input ends.
+
+   The session's Receptor is chosen when `initialize` arrives (via
+   `:select-receptor`, default: from the environment) and armed on the first
+   message AFTER it, i.e. once the handshake is done, so no channel event can
+   precede the initialize result. It is disarmed when input ends. Every write,
+   response or notification, goes through one serialised transport."
   ([] (run-server (proto/stdio-transport)))
-  ([transport]
-   (loop []
-     (when-let [msg (proto/read-msg transport)]
-       (when-let [response (handle-method msg)]
-         (proto/write-msg transport response))
-       (recur)))))
+  ([transport] (run-server transport {}))
+  ([transport {:keys [select-receptor] :or {select-receptor env-receptor}}]
+   (let [t (proto/serialized transport)
+         none (receptor/null-receptor)]
+     (loop [r none]
+       (if-let [msg (proto/read-msg t)]
+         (let [initialize? (= "initialize" (:method msg))
+               r (if initialize? (select-receptor) r)]
+           (when-let [response (respond r msg)]
+             (proto/write-msg t response))
+           (when-not initialize? (receptor/arm! r t))
+           (recur r))
+         (receptor/disarm! r))))))
 
 (defn- warn-unless-nrepl-reachable!
   "Print a startup hint to stderr when no nREPL answers on the resolved port.
