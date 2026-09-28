@@ -10,7 +10,8 @@
             [bb-mcp.host.port :as hp]
             [bb-mcp.guard :as guard]
             [bb-mcp.piggyback :as piggyback]
-            [bb-mcp.sense.receptor :as receptor]))
+            [bb-mcp.sense.receptor :as receptor]
+            [bb-mcp.async :as async]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -115,7 +116,11 @@
                       (fn [args] (bash-spec/format-result (execute args))))))
 
 (def ^:private native-tools
-  (into [] (remove nil?)
+  (into [] (comp (remove nil?)
+                 ;; Every native tool may run in the background, so every one
+                 ;; declares `async`: an undeclared param never arrives.
+                 (map #(tool/native-tool (async/with-async-property (tool/tool-spec %))
+                                         (:handler %))))
         [(bash-tool)
          (tool/native-tool nrepl/tool-spec nrepl/execute)]))
 
@@ -186,13 +191,28 @@
 
       :else (invoke-safely t arguments))))
 
+(defn- async-invoke
+  "The guard's verdict applied to one native call, then the call QUEUED.
+
+   The guard runs first, on the caller's thread, so a denied call is refused
+   in-band and never started. An allowed call returns its ack at once; the
+   result arrives through `async/drain!` on a later response."
+  [t name arguments]
+  (let [decision (guard/decide name (inject-agent-context arguments))]
+    (if (guard/denied? decision)
+      {:result (guard/refusal-text name decision) :error? true}
+      {:result (cond-> (async/submit! name #(invoke-safely t arguments))
+                 (guard/warned? decision) (str "\n\n" (guard/warning-text decision)))
+       :error? false})))
+
 (defn- guarded-invoke
   "Invoke `t`, gated and piggybacked when this head serves the tool itself.
 
    A forwarded tool is judged by hive-mcp's own dispatch gate and gets its
    piggyback blocks from hive-mcp's middleware; doing either here as well
    would double-count it. Only the native tools, which reach neither, are
-   judged and drained here.
+   judged and drained here. The same holds for `async`: hive-mcp queues a
+   forwarded call itself, so only a native call is queued here.
 
      :deny: short-circuits; the tool never runs.
      :warn: the tool runs and the advisory is appended.
@@ -202,16 +222,25 @@
   [t name arguments]
   (if-not (contains? native-tool-names name)
     (invoke-safely t arguments)
-    (let [outcome (judged-invoke t name arguments)]
+    (let [background? (async/requested? arguments)
+          arguments   (async/strip arguments)
+          outcome     (if background?
+                        (async-invoke t name arguments)
+                        (judged-invoke t name arguments))]
       (update outcome :result
               #(piggyback/append (str %) (*drain-fn* name (inject-agent-context arguments)))))))
 
 (defn- call-tool
-  "Resolve, invoke, log, and build the tools/call response for `name`."
+  "Resolve, invoke, log, and build the tools/call response for `name`.
+
+   Results of native calls queued with async:true ride out on whatever call
+   comes next, forwarded or native, so the caller need not know which head
+   ran the work."
   [id name arguments]
   (let [t0 (System/currentTimeMillis)]
     (if-let [t (find-tool name)]
       (let [{:keys [result error?]} (guarded-invoke t name arguments)
+            result   (piggyback/append (str result) (async/drain!))
             response (proto/tool-call-response id result error?)]
         (log-tool-call name arguments response (- (System/currentTimeMillis) t0))
         response)
