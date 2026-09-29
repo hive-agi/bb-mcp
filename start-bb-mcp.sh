@@ -9,7 +9,7 @@
 #   BB_MCP_RUNTIME    - cljw (default) or bb
 #   BB_MCP_TOOL_SCHEMA - full (default) or compact: advertise only each tool's core
 #                        parameters and keep the rest accepted (bb-mcp.tools.hive.compact)
-#   CLJW_BIN          - cljw binary (default: config.edn :runtimes :cljw :binary, then PATH)
+#   CLJW_BIN          - cljw binary (default: config.edn :runtimes :cljw :binary, then every cljw on PATH)
 #   EMACS_SOCKET_NAME - Emacs daemon socket name for isolation (optional)
 #   BB_MCP_CHANNELS   - 1 to arm the sixth-sense channel receptor (opt-in; off by
 #                       default, so the session never polls the hive JVM). Pair
@@ -46,8 +46,9 @@ cd "$SCRIPT_DIR"
 #
 #   BB_MCP_RUNTIME=cljw  (default) ClojureWasm, classpath given explicitly
 #   BB_MCP_RUNTIME=bb              babashka, using bb.edn for the classpath
-#   CLJW_BIN                       cljw binary; falls back to config.edn
-#                                  :runtimes :cljw :binary, then `cljw` on PATH
+#   CLJW_BIN                       cljw binary; then config.edn :runtimes :cljw
+#                                  :binary (optional), then every `cljw` on PATH.
+#                                  The first that exists and has cljw.net wins.
 HIVE_CONFIG="${HIVE_MCP_CONFIG:-$HOME/.config/hive-mcp/config.edn}"
 
 config_cljw_bin() {
@@ -58,8 +59,34 @@ config_cljw_bin() {
 
 # True when the cljw binary provides cljw.net/connect (the nREPL client's socket).
 cljw_has_net() {
-    [[ -x "$1" || -x "$(command -v "$1" 2>/dev/null || echo /nonexistent)" ]] || return 1
     "$1" -e '(println (some? (resolve (quote cljw.net/connect))))' </dev/null 2>/dev/null | grep -qx true
+}
+
+# Candidate cljw binaries, in precedence order: CLJW_BIN, config.edn
+# :runtimes :cljw :binary, then every `cljw` on PATH. No path is assumed.
+cljw_candidates() {
+    [[ -n "${CLJW_BIN:-}" ]] && echo "$CLJW_BIN"
+    config_cljw_bin
+    type -ap cljw 2>/dev/null || true
+}
+
+# Prints the first candidate that exists and provides cljw.net/connect;
+# reports each rejected candidate on stderr with the reason.
+resolve_cljw() {
+    local c path
+    while IFS= read -r c; do
+        [[ -n "$c" ]] || continue
+        path="$(command -v "$c" 2>/dev/null || true)"
+        if [[ -z "$path" || ! -x "$path" ]]; then
+            echo "start-bb-mcp.sh: cljw candidate '$c' not found or not executable, skipping." >&2
+        elif cljw_has_net "$path"; then
+            echo "$path"
+            return 0
+        else
+            echo "start-bb-mcp.sh: '$path' does not provide cljw.net/connect, skipping." >&2
+        fi
+    done < <(cljw_candidates | awk '!seen[$0]++')
+    return 1
 }
 
 start_bb() {
@@ -76,12 +103,10 @@ RUNTIME_EXPLICIT="${BB_MCP_RUNTIME:+yes}"
 
 case "$RUNTIME" in
     cljw)
-        CLJW="${CLJW_BIN:-$(config_cljw_bin)}"
-        CLJW="${CLJW:-cljw}"
-        if cljw_has_net "$CLJW"; then
+        if CLJW="$(resolve_cljw)"; then
             start_cljw "$CLJW"
         fi
-        echo "start-bb-mcp.sh: '$CLJW' does not provide cljw.net/connect — the nREPL client cannot run." >&2
+        echo "start-bb-mcp.sh: no usable cljw (with cljw.net/connect); the nREPL client cannot run on cljw." >&2
         if [[ -n "${CLJW_BIN:-}" ]] || ! command -v bb >/dev/null 2>&1; then
             echo "start-bb-mcp.sh: build ClojureWasm main (zig build -Dwasm -Doptimize=ReleaseFast), or set CLJW_BIN, or run with BB_MCP_RUNTIME=bb." >&2
             exit 3
