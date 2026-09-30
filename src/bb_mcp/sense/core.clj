@@ -391,19 +391,19 @@
 (defn receptor-parent
   "The parent this session listens for, from `env` and its `caller-id`:
      BB_MCP_SENSE_PARENT     explicit; `*` or `all` means no filter (nil)
-     CLAUDE_SWARM_SLAVE_ID   a ling hears its own children
-     caller-id               the session's own `_caller_id`
-                             (\"coordinator:<instance>\"), which hive-mcp
-                             records as the parent of every ling it spawns,
-                             so a coordinator hears ITS swarm, not the host's
+     caller-id               the session's own `_caller_id`, which hive-mcp
+                             records verbatim as the parent of every ling the
+                             session spawns: \"coordinator:<instance>\" for a
+                             coordinator, \"<slave-id>:<instance>\" for a ling
+     CLAUDE_SWARM_SLAVE_ID   fallback when no caller id is known
    nil when none applies (no caller-id given and nothing set)."
   [env caller-id]
   (let [explicit (some-> (present (get env "BB_MCP_SENSE_PARENT")) str/trim)]
     (cond
       (contains? every-parent (some-> explicit str/lower-case)) nil
       explicit explicit
-      :else (or (present (get env "CLAUDE_SWARM_SLAVE_ID"))
-                (present caller-id)))))
+      :else (or (present caller-id)
+                (present (get env "CLAUDE_SWARM_SLAVE_ID"))))))
 
 (defn receptor-spec
   "The receptor hive-agent filters senses by, from `env` and the session's
@@ -422,11 +422,24 @@
        projects (assoc :receptor/projects projects)
        classes (assoc :receptor/classes (into #{} (map #(keyword "sense" %)) classes))))))
 
+(def ^:private channel-consumer-suffix
+  "Marks the channel receptor's consumer id apart from the session's own
+   caller id, which manual `ss drain` calls use as their consumer by default."
+  "#channel")
+
+(defn channel-consumer
+  "The hive-side consumer id the channel receptor drains under for a session
+   with `caller-id`: its own cursor, never shared with the session's manual
+   drains (nil when `caller-id` is blank)."
+  [caller-id]
+  (some-> (present caller-id) (str channel-consumer-suffix)))
+
 (defn feed-spec
-  "How the nREPL feed drains for a session: per-consumer under `caller-id`
-   (nil = the stateless path only), `policy`'s :limit and :prime?."
+  "How the nREPL feed drains for a session: per-consumer under
+   `channel-consumer` of `caller-id` (nil = the stateless path only),
+   `policy`'s :limit and :prime?."
   [caller-id policy]
-  {:consumer (present caller-id)
+  {:consumer (channel-consumer caller-id)
    :limit (:limit policy)
    :prime? (boolean (:prime? policy))})
 

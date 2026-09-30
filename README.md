@@ -130,14 +130,16 @@ content ends with the same detail compactly (`[termination=max-turns]`).
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `BB_MCP_CHANNELS` | `1` arms the receptor (opt-in) | off |
-| `BB_MCP_SENSE_PARENT` | Parent whose lings this session hears; `*` or `all` hears every swarm on the host | `CLAUDE_SWARM_SLAVE_ID`, else this session's caller id (`coordinator:<instance>`, the parent hive-mcp records for lings it spawns) |
+| `BB_MCP_SENSE_PARENT` | Parent whose lings this session hears; `*` or `all` hears every swarm on the host | This session's caller id, the parent hive-mcp records verbatim for lings it spawns (`coordinator:<instance>` for a coordinator, `<slave-id>:<instance>` for a ling); `CLAUDE_SWARM_SLAVE_ID` only when no caller id is known |
 | `BB_MCP_SENSE_PROJECTS` | Comma list of project ids | all |
 | `BB_MCP_SENSE_CLASSES` | Comma list of classes, e.g. `ask,blocked,completed,truncated,error` | all |
 | `BB_MCP_SENSE_POLL_MS` | Poll interval | 1000 |
 | `BB_MCP_SENSE_REPLAY` | `1` delivers the backlog from before the session | off |
 
 When the hive has hive-agent's per-consumer port (`sense-port`), the drain
-cursor is kept in the hive under the session's caller id, so a restarted
+cursor is kept in the hive under its own consumer id, `<caller-id>#channel`,
+apart from the session's manual `ss drain` calls (which default to the bare
+caller id and would otherwise share one consume-once cursor), so a restarted
 bb-mcp resumes where it left off; a consumer the hive has never seen starts
 at the log head. On an older hive-agent it falls back to the stateless
 `api/drain` with a cursor held in bb-mcp, dropping the first backlog and

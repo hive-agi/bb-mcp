@@ -164,8 +164,9 @@
    e.g. \"coordinator:<instance>\"). Channels are OPT-IN
    (`sense/channels-wanted?`): a channel receptor only when the client
    declares it listens or BB_MCP_CHANNELS=1; otherwise the null receptor,
-   which never polls. The caller id is both the default parent the receptor
-   listens for and the consumer its hive-side cursor is kept under."
+   which never polls. The caller id is the default parent the receptor
+   listens for; its hive-side cursor is kept under `sense/channel-consumer`
+   of it, apart from the session's manual drains."
   ([env init-request] (select env init-request nil))
   ([env init-request caller-id]
    (if (sense/channels-wanted? env init-request)

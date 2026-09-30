@@ -461,12 +461,17 @@
 (deftest receptor-spec-defaults-to-the-caller-id
   (testing "a coordinator hears ITS swarm, not every swarm on the host"
     (is (= {:receptor/parent "coordinator:abc"} (sense/receptor-spec {} "coordinator:abc"))))
-  (testing "a ling still hears its own children"
-    (is (= {:receptor/parent "ling-1"}
+  (testing "a ling hears its children under its caller id, which hive-mcp records as their parent"
+    (is (= {:receptor/parent "ling-1:abc"}
            (sense/receptor-spec {"CLAUDE_SWARM_SLAVE_ID" "ling-1"} "ling-1:abc"))))
+  (testing "the slave id only stands in when no caller id is known"
+    (is (= {:receptor/parent "ling-1"}
+           (sense/receptor-spec {"CLAUDE_SWARM_SLAVE_ID" "ling-1"} " "))))
   (testing "an explicit parent wins"
     (is (= {:receptor/parent "boss"}
-           (sense/receptor-spec {"BB_MCP_SENSE_PARENT" " boss "} "coordinator:abc"))))
+           (sense/receptor-spec {"BB_MCP_SENSE_PARENT" " boss "
+                                 "CLAUDE_SWARM_SLAVE_ID" "ling-1"}
+                                "coordinator:abc"))))
   (testing "* or all opts out of the parent filter"
     (doseq [v ["*" "all" " ALL "]]
       (is (= {} (sense/receptor-spec {"BB_MCP_SENSE_PARENT" v
@@ -476,8 +481,15 @@
   (testing "blank caller id: no parent"
     (is (= {} (sense/receptor-spec {} " ")))))
 
+(deftest channel-consumer-is-apart-from-the-caller-id
+  (testing "manual drains default to the caller id; the channel never shares that cursor"
+    (is (= "coordinator:abc#channel" (sense/channel-consumer "coordinator:abc")))
+    (is (not= "coordinator:abc" (sense/channel-consumer "coordinator:abc"))))
+  (is (nil? (sense/channel-consumer nil)))
+  (is (nil? (sense/channel-consumer "  "))))
+
 (deftest feed-spec-names-the-consumer
-  (is (= {:consumer "coordinator:abc" :limit 100 :prime? true}
+  (is (= {:consumer "coordinator:abc#channel" :limit 100 :prime? true}
          (sense/feed-spec "coordinator:abc" sense/default-policy)))
   (is (= {:consumer nil :limit 100 :prime? false}
          (sense/feed-spec nil (sense/policy-from {"BB_MCP_SENSE_REPLAY" "1"})))))
