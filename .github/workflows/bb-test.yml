@@ -1,0 +1,31 @@
+name: bb-test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, staging]
+  workflow_dispatch:
+
+concurrency:
+  group: bb-test-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Babashka
+        uses: DeLaGuardo/setup-clojure@13.0
+        with:
+          bb: latest
+
+      - name: Run tests
+        run: bb test
