@@ -449,3 +449,162 @@
   (is (= sense/default-policy (sense/policy-from {})))
   (is (= 250 (:base-ms (sense/policy-from {"BB_MCP_SENSE_POLL_MS" "250"}))))
   (is (false? (:prime? (sense/policy-from {"BB_MCP_SENSE_REPLAY" "1"})))))
+
+;;; ===========================================================================
+;;; Default parent: the session's own caller id
+;;; ===========================================================================
+
+(deftest caller-id-is-the-spawn-parent-string
+  (is (= "coordinator:abc" (core/caller-id nil "abc")))
+  (is (= "ling-4:abc" (core/caller-id "ling-4" "abc"))))
+
+(deftest receptor-spec-defaults-to-the-caller-id
+  (testing "a coordinator hears ITS swarm, not every swarm on the host"
+    (is (= {:receptor/parent "coordinator:abc"} (sense/receptor-spec {} "coordinator:abc"))))
+  (testing "a ling still hears its own children"
+    (is (= {:receptor/parent "ling-1"}
+           (sense/receptor-spec {"CLAUDE_SWARM_SLAVE_ID" "ling-1"} "ling-1:abc"))))
+  (testing "an explicit parent wins"
+    (is (= {:receptor/parent "boss"}
+           (sense/receptor-spec {"BB_MCP_SENSE_PARENT" " boss "} "coordinator:abc"))))
+  (testing "* or all opts out of the parent filter"
+    (doseq [v ["*" "all" " ALL "]]
+      (is (= {} (sense/receptor-spec {"BB_MCP_SENSE_PARENT" v
+                                      "CLAUDE_SWARM_SLAVE_ID" "ling-1"}
+                                     "coordinator:abc"))
+          v)))
+  (testing "blank caller id: no parent"
+    (is (= {} (sense/receptor-spec {} " ")))))
+
+(deftest feed-spec-names-the-consumer
+  (is (= {:consumer "coordinator:abc" :limit 100 :prime? true}
+         (sense/feed-spec "coordinator:abc" sense/default-policy)))
+  (is (= {:consumer nil :limit 100 :prime? false}
+         (sense/feed-spec nil (sense/policy-from {"BB_MCP_SENSE_REPLAY" "1"})))))
+
+;;; ===========================================================================
+;;; drain-form path selection, evaluated against stub hive namespaces
+;;; ===========================================================================
+
+(def ^:private api-ns 'hive-agent.sixth-sense.api)
+(def ^:private state-ns 'hive-agent.sixth-sense.state)
+
+(defn- with-hive
+  "Run `f` with stub hive namespaces holding `api` / `state` vars
+   ({sym fn}), removed afterwards so no other test sees them."
+  [{:keys [api state]} f]
+  (try
+    (when api (let [n (create-ns api-ns)] (doseq [[k v] api] (intern n k v))))
+    (when state (let [n (create-ns state-ns)] (doseq [[k v] state] (intern n k v))))
+    (f)
+    (finally
+      (remove-ns api-ns)
+      (remove-ns state-ns))))
+
+(defn- eval-drain
+  "Evaluate `drain-form` as the hive JVM would and read it as the feed does."
+  [cursor receptor opts]
+  (sense/read-drain-reply
+   {:error? false :result (pr-str (load-string (sense/drain-form cursor receptor opts)))}))
+
+(defn- stub-port
+  "A sense-port whose :drain! records its opts in `seen` and answers `reply`."
+  [seen reply]
+  (fn [] {:drain! (fn [opts] (reset! seen opts) reply)}))
+
+(deftest drain-form-selects-the-per-consumer-port
+  (let [seen (atom nil) stateless (atom nil)
+        hive {:api {'sense-port (stub-port seen {:senses [done] :cursor 12})
+                    'drain (fn [o] (reset! stateless o) {:senses [] :cursor 0})}
+              :state {'default-sensorium (constantly ::sensorium)
+                      'consumer-cursors (constantly {"coordinator:abc" 7})
+                      'head (constantly 12)}}]
+    (testing "a known consumer drains from its stored cursor; the loop cursor is not sent"
+      (with-hive hive
+        #(is (= {:outcome :ok :senses [done] :cursor 12 :consumer "coordinator:abc" :primed? true}
+                (eval-drain 3 {:receptor/parent "coordinator:abc"}
+                            {:consumer "coordinator:abc" :limit 50 :prime? true}))))
+      (is (= {:consumer "coordinator:abc" :receptor {:receptor/parent "coordinator:abc"} :limit 50}
+             @seen))
+      (is (nil? @stateless) "the stateless drain is not called"))
+    (testing "a new consumer skips its backlog in the hive: it reads from the head"
+      (with-hive (assoc-in hive [:state 'consumer-cursors] (constantly {}))
+        #(is (true? (:primed? (eval-drain 0 {} {:consumer "c:new" :prime? true})))))
+      (is (= 12 (:cursor @seen))))
+    (testing "BB_MCP_SENSE_REPLAY: a new consumer reads its backlog"
+      (reset! seen nil)
+      (with-hive (assoc-in hive [:state 'consumer-cursors] (constantly {}))
+        #(is (false? (:primed? (eval-drain 0 {} {:consumer "c:new" :prime? false})))))
+      (is (not (contains? @seen :cursor))))
+    (testing "cursors unreadable: the loop is asked to prime itself"
+      (with-hive (dissoc hive :state)
+        #(is (false? (:primed? (eval-drain 0 {} {:consumer "c:1" :prime? true}))))))))
+
+(deftest drain-form-falls-back-to-the-stateless-drain
+  (let [stateless (atom nil)
+        drain (fn [o] (reset! stateless o) {:senses [ask] :cursor 4 :epoch "E"})]
+    (testing "no sense-port in the hive"
+      (with-hive {:api {'drain drain}}
+        #(is (= {:outcome :ok :senses [ask] :cursor 4 :epoch "E"}
+                (eval-drain 2 {} {:consumer "c:1" :prime? true}))))
+      (is (= {:cursor 2 :receptor {}} @stateless)))
+    (testing "no consumer named"
+      (with-hive {:api {'drain drain 'sense-port (stub-port (atom nil) {:senses [] :cursor 0})}}
+        #(is (not (contains? (eval-drain 2 {} {}) :consumer))))))
+  (testing "nothing loaded: absent"
+    (is (= {:outcome :absent} (eval-drain 0 {} {:consumer "c:1"})))))
+
+;;; ===========================================================================
+;;; Detail on the wire and in the notification
+;;; ===========================================================================
+
+(deftest drain-form-forwards-a-printable-detail
+  (let [s (assoc done :sense/detail {:termination :max-turns :at (java.util.UUID/randomUUID)})
+        reply (with-hive {:api {'drain (constantly {:senses [s] :cursor 1})}}
+                #(eval-drain 0 {} {}))
+        d (-> reply :senses first :sense/detail)]
+    (is (= :max-turns (:termination d)))
+    (is (string? (:at d)) "an unreadable value is sent as text")))
+
+(deftest detail-rides-in-meta-and-content
+  (let [n (sense/sense->notification
+           (assoc done :sense/class :sense/truncated :sense/detail {:termination :max-turns}))]
+    (is (= "max-turns" (get-in n [:params :meta :termination])))
+    (is (= "truncated" (get-in n [:params :meta :sense_class])))
+    (is (= "ling-8 completed [termination=max-turns]" (get-in n [:params :content]))))
+  (testing "JSON-shaped detail: string keys, error/type"
+    (let [n (sense/sense->notification
+             (assoc ask :sense/detail {"error/type" "context-overflow" "reason" "no-progress"}))]
+      (is (= {:error_type "context-overflow" :reason "no-progress"}
+             (select-keys (get-in n [:params :meta]) [:error_type :reason])))
+      (is (str/ends-with? (get-in n [:params :content]) "[error_type=context-overflow reason=no-progress]"))))
+  (testing "no detail: unchanged"
+    (is (= (:sense/text ask) (get-in (sense/sense->notification ask) [:params :content])))))
+
+;;; ===========================================================================
+;;; Loop over the per-consumer port
+;;; ===========================================================================
+
+(deftest consumer-replies-deliver-when-the-hive-primed
+  (let [{:keys [sent]} (run-script [{:outcome :ok :senses [ask] :cursor 5 :consumer "c" :primed? true}
+                                    {:outcome :ok :senses [done] :cursor 6 :consumer "c" :primed? true}]
+                                   2 :policy sense/default-policy)]
+    (is (= [(sense/sense->notification ask) (sense/sense->notification done)] sent))))
+
+(deftest consumer-replies-prime-locally-when-the-hive-could-not
+  (let [{:keys [sent]} (run-script [{:outcome :ok :senses [ask] :cursor 5 :consumer "c" :primed? false}
+                                    {:outcome :ok :senses [done] :cursor 6 :consumer "c" :primed? false}]
+                                   2 :policy sense/default-policy)]
+    (is (= [(sense/sense->notification done)] sent))))
+
+(deftest consumer-replies-never-reread
+  (testing "the hive owns the cursor: a lower cursor or new epoch is not a local restart"
+    (let [{:keys [sent logs]} (run-script [{:outcome :ok :senses [] :cursor 50 :epoch "A" :consumer "c" :primed? true}
+                                           {:outcome :ok :senses [ask] :cursor 1 :epoch "B" :consumer "c" :primed? true}]
+                                          2)]
+      (is (= [(sense/sense->notification ask)] sent))
+      (is (not-any? #(str/includes? % "restarted") logs)))))
+
+(deftest drain-reply-carries-the-consumer
+  (is (= {:outcome :ok :senses [] :cursor 3 :consumer "c:1" :primed? true}
+         (sense/read-drain-reply (nrepl-says {:senses [] :cursor 3 :consumer "c:1" :primed? true})))))

@@ -56,6 +56,15 @@
       (getenv "BB_MCP_CLIENT_ID")
       (getenv "CLAUDE_SWARM_SLAVE_ID")))
 
+(defn caller-id
+  "The id this session calls the hive as: `<agent-id>:<instance>`, or
+   `coordinator:<instance>` for a session that is not a ling. Pure. It is
+   stamped on every request as `_caller_id`, hive-mcp records it as the
+   parent of every ling this session spawns, and the sixth-sense receptor
+   uses it as its default parent and its drain consumer id."
+  [agent-id instance]
+  (str (or agent-id "coordinator") ":" instance))
+
 (def ^:private caller-cwd
   "Working directory of the Claude Code session (the project being worked on).
    Prefers BB_MCP_CALLER_CWD (the invocation pwd captured by start-bb-mcp.sh
@@ -81,8 +90,8 @@
      so bb-mcp must NOT overwrite it."
   [args]
   (let [agent-id (get-agent-id)
-        caller-id (str (or agent-id "coordinator") ":" instance-id)]
-    (cond-> (assoc args :_caller_id caller-id)
+        caller (caller-id agent-id instance-id)]
+    (cond-> (assoc args :_caller_id caller)
       ;; Inject cwd when args don't already have a directory
       (not (:directory args))
       (assoc :_caller_cwd caller-cwd)
@@ -280,9 +289,11 @@
 
 (defn- env-receptor
   "The receptor for the session `init-request` opens, from that request and
-   this process's environment (channels are opt-in: see receptor/select)."
+   this process's environment and caller id (channels are opt-in: see
+   receptor/select)."
   [init-request]
-  (receptor/select (into {} (System/getenv)) init-request))
+  (receptor/select (into {} (System/getenv)) init-request
+                   (caller-id (get-agent-id) instance-id)))
 
 (defn- in-session
   "`msg` as the session with receptor `r` sees it: carrying the capabilities

@@ -41,21 +41,26 @@
   5000)
 
 (defn nrepl-feed
-  "The hive JVM's sense log, polled with `hive-agent.sixth-sense.api/drain`.
-   `opts` may carry :eval-fn and :port-fn (defaults: the shared nREPL client)."
+  "The hive JVM's sense log, polled over nREPL (see `sense/drain-form`):
+   through hive-agent's per-consumer port when `opts` names a :consumer and
+   the hive has it, else with the stateless `hive-agent.sixth-sense.api/drain`.
+   `opts` may carry :consumer, :limit and :prime? (`sense/feed-spec`), and
+   :eval-fn and :port-fn (defaults: the shared nREPL client)."
   ([] (nrepl-feed {}))
   ([{:keys [eval-fn port-fn timeout-ms]
      :or {eval-fn nrepl/eval-code port-fn nrepl/get-nrepl-port
-          timeout-ms drain-timeout-ms}}]
-   (reify SenseFeed
-     (drain! [_ cursor receptor]
-       (try
-         (sense/read-drain-reply
-          (eval-fn {:port (port-fn)
-                    :code (sense/drain-form cursor receptor)
-                    :timeout-ms timeout-ms}))
-         (catch Exception e
-           {:outcome :failed :detail (or (ex-message e) (str e))}))))))
+          timeout-ms drain-timeout-ms}
+     :as opts}]
+   (let [spec (select-keys opts [:consumer :limit :prime?])]
+     (reify SenseFeed
+       (drain! [_ cursor receptor]
+         (try
+           (sense/read-drain-reply
+            (eval-fn {:port (port-fn)
+                      :code (sense/drain-form cursor receptor spec)
+                      :timeout-ms timeout-ms}))
+           (catch Exception e
+             {:outcome :failed :detail (or (ex-message e) (str e))})))))))
 
 ;;; ===========================================================================
 ;;; Receptor
@@ -155,11 +160,17 @@
 
 (defn select
   "The receptor for the session `init-request` opens, given `env` (a map of
-   environment strings). Channels are OPT-IN (`sense/channels-wanted?`): a
-   channel receptor only when the client declares it listens or
-   BB_MCP_CHANNELS=1; otherwise the null receptor, which never polls."
-  [env init-request]
-  (if (sense/channels-wanted? env init-request)
-    (channel-receptor {:receptor-spec (sense/receptor-spec env)
-                       :policy (sense/policy-from env)})
-    (null-receptor)))
+   environment strings) and the session's `caller-id` (its `_caller_id`,
+   e.g. \"coordinator:<instance>\"). Channels are OPT-IN
+   (`sense/channels-wanted?`): a channel receptor only when the client
+   declares it listens or BB_MCP_CHANNELS=1; otherwise the null receptor,
+   which never polls. The caller id is both the default parent the receptor
+   listens for and the consumer its hive-side cursor is kept under."
+  ([env init-request] (select env init-request nil))
+  ([env init-request caller-id]
+   (if (sense/channels-wanted? env init-request)
+     (let [policy (sense/policy-from env)]
+       (channel-receptor {:receptor-spec (sense/receptor-spec env caller-id)
+                          :policy policy
+                          :feed (nrepl-feed (sense/feed-spec caller-id policy))}))
+     (null-receptor))))
