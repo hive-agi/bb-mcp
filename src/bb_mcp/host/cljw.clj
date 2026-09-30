@@ -44,9 +44,20 @@
   [{:keys [host port]}]
   (->CljwChannel (connect-fn (or host "localhost") port)))
 
+(defn- json-safe
+  "`v` with every collection cljw's `write-str` refuses (lists, seqs, sets)
+   turned into a vector, so this codec writes what cheshire writes on bb: an
+   array. Without it one tool schema built with `(sort ...)` fails the whole
+   tools/list reply."
+  [v]
+  (cond
+    (map? v) (into {} (map (fn [[k x]] [k (json-safe x)])) v)
+    (coll? v) (mapv json-safe v)
+    :else v))
+
 (defrecord DataJsonCodec []
   hp/IJsonCodec
-  (encode-json [_ v] (write-str v))
+  (encode-json [_ v] (write-str (json-safe v)))
   (decode-json [_ s] (read-str s :key-fn keyword)))
 
 (def json

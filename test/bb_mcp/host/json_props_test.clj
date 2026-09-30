@@ -42,3 +42,11 @@
     (let [mutant (fn [v] (hp/json-encode (if (integer? v) (str v) v)))]
       (is (seq (roundtrip-failures mutant hp/json-decode
                                    (gen/samples gen/gen-int 7 40)))))))
+
+(deftest seqs-and-sets-encode-as-arrays
+  (testing (str "adapter " (hp/adapter-ns) " writes lists, lazy seqs and sets as arrays, like cheshire")
+    (is (= {:enum ["a" "b"] :nested [{:xs [1 2]}] :tags ["only"]}
+           (hp/json-decode
+            (hp/json-encode {:enum (sort ["b" "a"])
+                             :nested (list {:xs (map inc [0 1])})
+                             :tags #{"only"}}))))))
