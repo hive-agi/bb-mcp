@@ -13,7 +13,9 @@
             [bb-mcp.tools.bash.remote-test]
             [bb-mcp.guard-test]
             [bb-mcp.piggyback-test]
-            [bb-mcp.tools.hive.compact-test]))
+            [bb-mcp.sense-test]
+            [bb-mcp.tools.hive.compact-test]
+            [bb-mcp.async-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -29,7 +31,9 @@
    'bb-mcp.core-test
    'bb-mcp.guard-test
    'bb-mcp.piggyback-test
-   'bb-mcp.tools.bash.remote-test])
+   'bb-mcp.sense-test
+   'bb-mcp.tools.bash.remote-test
+   'bb-mcp.async-test])
 
 (def ^:private host-suites
   "Suites whose SUBJECT is a host primitive some runtime may not have. A

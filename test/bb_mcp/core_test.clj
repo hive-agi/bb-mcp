@@ -3,10 +3,20 @@
             [clojure.string :as str]
             [bb-mcp.core :as core]
             [bb-mcp.tool :as tool]
-            [bb-mcp.protocol :as proto]))
+            [bb-mcp.protocol :as proto]
+            [bb-mcp.sense.receptor :as receptor]))
 
 (def ^:private t1 (tool/native-tool {:name "t1"} (fn [_] {:result "1" :error? false})))
 (def ^:private t2 (tool/native-tool {:name "t2"} (fn [_] {:result "2" :error? false})))
+
+(deftest get-agent-id-prefers-generic-client-env
+  (testing "Dirge can identify its bb-mcp session without pretending to be a Claude swarm slave"
+    (with-redefs [core/getenv (fn [k]
+                                (case k
+                                  "BB_MCP_CLIENT_ID" "dirge"
+                                  "CLAUDE_SWARM_SLAVE_ID" "claude-slave"
+                                  nil))]
+      (is (= "dirge" (#'core/get-agent-id))))))
 
 ;; ── toolsource: get-tools aggregates over an ordered source list ──────────────
 
@@ -92,7 +102,7 @@
                      (when (seq @inbox)
                        (let [m (first @inbox)] (swap! inbox rest) m)))
                    (write-msg [_ m] (swap! outbox conj m)))]
-      (core/run-server t)
+      (core/run-server t {:select-receptor (fn [_init] (receptor/null-receptor))})
       (is (= [(proto/initialize-response 1)
               (proto/json-rpc-response 2 {:prompts []})]
              @outbox)))))

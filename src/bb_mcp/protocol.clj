@@ -24,13 +24,21 @@
             data (assoc :data data))})
 
 ;; MCP message types
-(defn initialize-response [id]
-  (json-rpc-response id
-                     {:protocolVersion protocol-version
-                      :capabilities {:tools {:listChanged false}
-                                     :resources {:listChanged false}}
-                      :serverInfo {:name server-name
-                                   :version server-version}}))
+(def base-capabilities
+  "What every bb-mcp session advertises."
+  {:tools {:listChanged false}
+   :resources {:listChanged false}})
+
+(defn initialize-response
+  "The initialize result. `extra-capabilities` (e.g. a receptor's
+   {:experimental {\"claude/channel\" {}}}) is merged over the base set."
+  ([id] (initialize-response id {}))
+  ([id extra-capabilities]
+   (json-rpc-response id
+                      {:protocolVersion protocol-version
+                       :capabilities (merge-with merge base-capabilities extra-capabilities)
+                       :serverInfo {:name server-name
+                                    :version server-version}})))
 
 (defn tools-list-response [id tools]
   (json-rpc-response id
@@ -82,18 +90,13 @@
       nil)))
 
 (defn write-message
-  "Write a JSON-RPC message to stdout as newline-delimited JSON."
+  "Write a JSON-RPC message to stdout as newline-delimited JSON.
+   The line is encoded first and written in ONE print, so a message is never
+   half-written when a writer is interrupted between encode and print."
   [msg]
-  (let [json-str (hp/json-encode msg)]
-    (println json-str)
+  (let [line (str (hp/json-encode msg) "\n")]
+    (print line)
     (flush)))
-
-(defn send-notification
-  "Send a JSON-RPC notification (no id, no response expected)."
-  [method params]
-  (write-message {:jsonrpc "2.0"
-                  :method method
-                  :params params}))
 
 ;; Transport — the effectful message boundary
 
@@ -102,12 +105,25 @@
   (read-msg  [t]     "Read the next message map, or nil at end of input.")
   (write-msg [t msg] "Write a message map."))
 
-(defrecord StdioTransport []
+(defrecord StdioTransport [out]
   Transport
   (read-msg  [_]     (read-message))
-  (write-msg [_ msg] (write-message msg)))
+  (write-msg [_ msg] (binding [*out* out] (write-message msg))))
 
 (defn stdio-transport
-  "Build a StdioTransport over *in*/*out*."
+  "Build a StdioTransport over *in* and the CURRENT *out*. The writer is
+   captured here so a write from another thread (the sense receptor) lands on
+   the same stream as the server's responses."
   []
-  (->StdioTransport))
+  (->StdioTransport *out*))
+
+(defn serialized
+  "`transport` with every write under one lock, so concurrent writers (the
+   server loop answering requests, the receptor sending notifications) never
+   interleave bytes: each message reaches the stream whole, one at a time.
+   Reads pass through unlocked; only this server's loop reads."
+  [transport]
+  (let [lock (Object.)]
+    (reify Transport
+      (read-msg [_] (read-msg transport))
+      (write-msg [_ msg] (locking lock (write-msg transport msg))))))
