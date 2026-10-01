@@ -14,7 +14,8 @@
             [bb-mcp.setup.io :as io]
             [bb-mcp.setup.model :as m]
             [cheshire.core :as json]
-            [clojure.java.io :as jio]))
+            [clojure.java.io :as jio]
+            [bb-mcp.update.io :as update-io]))
 
 (defn checkout-dir
   "The real directory of the bb-mcp checkout this code was loaded from."
@@ -35,14 +36,15 @@
 (defn system
   "The real world: this user's HOME, cwd, PATH, processes and clock."
   []
-  {:home     (or (System/getenv "HOME") (System/getProperty "user.home"))
-   :cwd      (str (fs/cwd))
-   :checkout (checkout-dir)
-   :getenv   #(System/getenv %)
-   :which    io/which
-   :exec     io/exec!
-   :probe    io/port-answers?
-   :now      stamp})
+  {:home          (or (System/getenv "HOME") (System/getProperty "user.home"))
+   :cwd           (str (fs/cwd))
+   :checkout      (checkout-dir)
+   :getenv        #(System/getenv %)
+   :which         io/which
+   :exec          io/exec!
+   :probe         io/port-answers?
+   :update-status #(update-io/status! (update-io/system) %)
+   :now           stamp})
 
 ;; ---------------------------------------------------------------------------
 ;; Collect (boundary)
@@ -56,8 +58,9 @@
     {:port port :answers? (boolean (probe port))}))
 
 (defn collect
-  "The planning context: options, paths and everything observed."
-  [{:keys [home cwd checkout now] :as sys} opts]
+  "The planning context: options, paths and everything observed. Under
+   --check that includes the release decision, when `sys` can make one."
+  [{:keys [home cwd checkout now update-status] :as sys} opts]
   (let [layout (m/layout home)
         base {:home home :cwd cwd :checkout checkout :layout layout
               :opts opts :stamp (now)}
@@ -65,7 +68,8 @@
                    :anchor-obs (io/observe-anchor layout)
                    :obs (io/observe sys (clients/observation-spec base)))]
     (cond-> ctx
-      (:check? opts) (assoc :nrepl (nrepl-state sys opts)))))
+      (:check? opts) (assoc :nrepl (nrepl-state sys opts))
+      (and (:check? opts) update-status) (assoc :update (update-status checkout)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Execute (boundary)

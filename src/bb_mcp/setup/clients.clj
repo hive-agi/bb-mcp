@@ -7,7 +7,8 @@
    Every method is pure: `observes` only names what the boundary must read,
    and the others work on the context that reading produced."
   (:require [bb-mcp.setup.model :as m]
-            [bb-mcp.setup.toml :as toml]))
+            [bb-mcp.setup.toml :as toml]
+            [bb-mcp.update :as u]))
 
 (defmulti observes
   "{:files [path ...] :dirs [path ...] :bins [name ...]} this client reads."
@@ -132,9 +133,11 @@
   (into [(m/plan-anchor ctx)] (per-client plan ctx)))
 
 (defn check-rows
-  "Every check row for `ctx`."
-  [{:keys [nrepl] :as ctx}]
-  (-> (m/check-anchor ctx)
-      (conj (m/check-bin "bb" (bin ctx "bb")))
-      (into (per-client check ctx))
-      (conj (m/check-port (:port nrepl) (:answers? nrepl)))))
+  "Every check row for `ctx`; the release row (warn-only) when the context
+   carries a release decision."
+  [{:keys [nrepl update checkout] :as ctx}]
+  (cond-> (-> (m/check-anchor ctx)
+              (conj (m/check-bin "bb" (bin ctx "bb")))
+              (into (per-client check ctx))
+              (conj (m/check-port (:port nrepl) (:answers? nrepl))))
+    update (conj (u/check-row update checkout))))

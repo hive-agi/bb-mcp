@@ -4,12 +4,18 @@
 ;;   bb-mcp                 the MCP server on stdio
 ;;   bb-mcp setup [opts]    publish this checkout at ~/.local/share/hive-mcp/bb-mcp
 ;;                          and register hive with MCP clients (bb-mcp setup --help)
+;;   bb-mcp notice          one stderr line when a newer release exists, else
+;;                          nothing (start-bb-mcp.sh runs it for the cljw runtime)
 
 (require '[babashka.classpath :as cp]
          '[babashka.fs :as fs])
 
-(cp/add-classpath (str (fs/path (fs/parent (fs/real-path *file*)) "src")))
+(def checkout (str (fs/parent (fs/real-path *file*))))
 
-(if (= "setup" (first *command-line-args*))
-  (apply (requiring-resolve 'bb-mcp.setup/-main) (rest *command-line-args*))
+(cp/add-classpath (str (fs/path checkout "src")))
+
+(case (first *command-line-args*)
+  "setup"  (apply (requiring-resolve 'bb-mcp.setup/-main) (rest *command-line-args*))
+  "notice" ((requiring-resolve 'bb-mcp.update.io/notify!)
+            ((requiring-resolve 'bb-mcp.update.io/system)) checkout)
   ((requiring-resolve 'bb-mcp.core/-main)))

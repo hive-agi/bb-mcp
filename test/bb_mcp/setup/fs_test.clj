@@ -186,5 +186,28 @@
     (is (= "fail" (:status (first (filter #(= "codex:env" (:step %)) rows)))))
     (is (= "ok" (:status (first (filter #(= "nrepl" (:step %)) rows)))))))
 
+(deftest check-reports-a-newer-release-as-a-warning
+  (let [w (world)
+        _ (setup/run (sys w :bins {"bb" "/usr/bin/bb"}) [])
+        asked (atom [])
+        status (fn [d] (fn [checkout] (swap! asked conj checkout) d))
+        check (fn [d] (setup/run (assoc (sys w :bins {"bb" "/usr/bin/bb"} :answers? true)
+                                        :update-status (status d))
+                                 ["--check"]))]
+    (testing "behind: a warn row naming both versions; the check still passes"
+      (let [r (check {:status :behind :local "1.2.29" :latest "1.2.30"})
+            row (first (filter #(= "update" (:step %)) (:rows r)))]
+        (is (= 0 (:exit r)) (:out r))
+        (is (= :warn (:status row)))
+        (is (str/includes? (:detail row) "1.2.29 -> 1.2.30"))
+        (is (= [(:checkout w)] @asked) "asked about this checkout")))
+    (testing "current or offline: ok"
+      (is (= :ok (get (statuses (check {:status :current :local "1.2.30" :latest "1.2.30"})) "update")))
+      (is (= :ok (get (statuses (check {:status :unknown :local "1.2.30"})) "update"))))
+    (testing "setup itself (no --check) never asks"
+      (reset! asked [])
+      (setup/run (assoc (sys w :bins {"bb" "/usr/bin/bb"}) :update-status (status nil)) [])
+      (is (= [] @asked)))))
+
 (deftest bad-arguments-exit-2
   (is (= 2 (:exit (setup/run (sys (world)) ["--client" "vim"])))))
