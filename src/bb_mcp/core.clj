@@ -65,6 +65,18 @@
   [agent-id instance]
   (str (or agent-id "coordinator") ":" instance))
 
+(defn with-caller-credential
+  "`args` carrying `credential` as `_caller_credential`. Pure.
+
+   The credential is the signed spawn credential the hive minted for this
+   process; it is opaque here, never parsed, logged or printed. Whatever the
+   model put under `_caller_credential` is dropped: the environment is the
+   only source. A nil or blank credential leaves the key absent."
+  [args credential]
+  (if (str/blank? credential)
+    (dissoc args :_caller_credential)
+    (assoc args :_caller_credential credential)))
+
 (def ^:private caller-cwd
   "Working directory of the Claude Code session (the project being worked on).
    Prefers BB_MCP_CALLER_CWD (the invocation pwd captured by start-bb-mcp.sh
@@ -78,10 +90,13 @@
 (defn- inject-agent-context
   "Inject agent context from CLAUDE_SWARM_SLAVE_ID env var.
 
-   Injects THREE fields:
+   Injects FOUR fields:
    - _caller_id: ALWAYS injected — identifies the MCP session/caller.
      Uses instance-id (PPID-based) for per-session cursor isolation.
      Never conflicts with user-specified agent_id (dispatch target).
+   - _caller_credential: the HIVE_AGENT_CREDENTIAL the hive minted for
+     this process, when set and non-blank; absent otherwise. Never taken
+     from args (see with-caller-credential).
    - _caller_cwd: ALWAYS injected — bb-mcp's working directory.
      Ensures hive-mcp resolves project-id from the caller's cwd,
      not from the JVM's user.dir (which differs in multiplexer setup).
@@ -91,7 +106,9 @@
   [args]
   (let [agent-id (get-agent-id)
         caller (caller-id agent-id instance-id)]
-    (cond-> (assoc args :_caller_id caller)
+    (cond-> (-> args
+                (assoc :_caller_id caller)
+                (with-caller-credential (getenv "HIVE_AGENT_CREDENTIAL")))
       ;; Inject cwd when args don't already have a directory
       (not (:directory args))
       (assoc :_caller_cwd caller-cwd)
