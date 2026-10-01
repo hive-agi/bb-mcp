@@ -15,21 +15,39 @@ bb-mcp is a lightweight MCP server written in Babashka (Clojure) that bridges Cl
 |------|---------|
 | `src/bb_mcp/core.clj` | Main entry, MCP message loop, tool registry |
 | `src/bb_mcp/protocol.clj` | JSON-RPC protocol (stdio communication) |
-| `src/bb_mcp/nrepl_spawn.clj` | Auto-spawn hive-mcp if not running |
+
+bb-mcp never spawns hive-mcp: it is a client of an nREPL the hive-mcp JVM
+already serves (port 7910 by default).
 
 ### Native Tools
 | File | Purpose |
 |------|---------|
 | `src/bb_mcp/tools/bash.clj` | Shell command execution |
-| `src/bb_mcp/tools/file.clj` | File read/write/glob operations |
-| `src/bb_mcp/tools/grep.clj` | Ripgrep wrapper |
 | `src/bb_mcp/tools/nrepl.clj` | nREPL client with bencode (byte-based) |
 
 ### Dynamic Tool Loading
 | File | Purpose |
 |------|---------|
-| `tools/emacs.clj` | Facade for dynamic tools, exposes `init!` and `get-tools` |
-| `tools/emacs/dynamic.clj` | Fetches tools from hive-mcp via nREPL at startup |
+| `src/bb_mcp/tools/hive.clj` | Facade for dynamic tools, exposes `init!` |
+| `src/bb_mcp/tools/hive/dynamic.clj` | Fetches tools from hive-mcp via nREPL at startup |
+
+### Setup (client registration)
+| File | Purpose |
+|------|---------|
+| `bb-mcp` | Entry shim: MCP server, or `bb-mcp setup ...` (runs from any cwd) |
+| `src/bb_mcp/setup.clj` | `bb-mcp setup` pipeline: parse, collect, plan, execute, report |
+| `src/bb_mcp/setup/model.clj` | Pure planning: anchor, entries, env, checks, args, table |
+| `src/bb_mcp/setup/clients.clj` | Client registry (multimethods keyed by client: claude, codex) |
+| `src/bb_mcp/setup/toml.clj` | Line-preserving Codex config.toml read/upsert |
+| `src/bb_mcp/setup/io.clj` | Boundary: observe filesystem/PATH, apply ops |
+
+The reference is wherever bb-mcp is checked out, published at the ANCHOR
+`~/.local/share/hive-mcp/bb-mcp` (a symlink). Every MCP client launches
+`<ANCHOR>/start-bb-mcp.sh` with no args, under the server name `hive`
+(`${HOME}/...` literally in JSON configs that expand env vars). Client
+registration lives only in `bb-mcp setup`. A new client is one set of
+`defmethod`s in `setup/clients.clj`. Never write `HIVE_MCP_DIR` into a client
+config.
 
 ## Common Commands
 
@@ -37,7 +55,11 @@ bb-mcp is a lightweight MCP server written in Babashka (Clojure) that bridges Cl
 # Run MCP server
 bb mcp
 
-# Run tests
+# Publish this checkout at the anchor and register hive with MCP clients
+./bb-mcp setup            # or: bb setup
+./bb-mcp setup --check    # verify; --dry-run to preview
+
+# Run tests (bb-mcp.test-runner, then bb-mcp.setup.suite)
 bb test
 
 # Start directly
@@ -47,7 +69,7 @@ bb -m bb-mcp.core
 ## Architecture Notes
 
 1. **Multiplexer Pattern**: Many bb-mcp instances (lightweight) share one hive-mcp JVM (heavyweight)
-2. **Dynamic Loading**: At startup, `emacs/init!` queries hive-mcp for all tools via nREPL
+2. **Dynamic Loading**: At startup, `hive/init!` queries hive-mcp for all tools via nREPL
 3. **Forwarding Handlers**: Each dynamic tool gets a handler that forwards calls to hive-mcp
 4. **No Static Tools**: All Emacs tools come from hive-mcp - add tools there, not here
 5. **Bencode**: Uses byte-based encoding for proper UTF-8 (not character-based)
@@ -55,7 +77,7 @@ bb -m bb-mcp.core
 ## Adding Tools
 
 **Native tools** (run in Babashka):
-1. Add to `src/bb_mcp/tools/` (bash, file, grep, nrepl)
+1. Add to `src/bb_mcp/tools/` (bash, nrepl)
 2. Register in `core.clj` native-tools vector
 
 **Emacs tools**: Add to hive-mcp - bb-mcp picks them up automatically via dynamic loading.
