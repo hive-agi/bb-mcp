@@ -18,6 +18,48 @@
                                   nil))]
       (is (= "dirge" (#'core/get-agent-id))))))
 
+;; ── caller credential: carried from HIVE_AGENT_CREDENTIAL, never from args ───
+
+(deftest with-caller-credential-carries-the-credential
+  (testing "a set credential is added unchanged"
+    (is (= {:command "ls" :_caller_credential "opaque.cred-1"}
+           (core/with-caller-credential {:command "ls"} "opaque.cred-1"))))
+  (testing "a model-supplied credential is overwritten by the environment's"
+    (is (= "opaque.cred-1"
+           (:_caller_credential
+            (core/with-caller-credential {:_caller_credential "forged"} "opaque.cred-1"))))))
+
+(deftest with-caller-credential-absent-when-unset-or-blank
+  (doseq [credential [nil "" "   "]]
+    (testing (str "credential " (pr-str credential) " leaves the key absent")
+      (is (= {:command "ls"}
+             (core/with-caller-credential {:command "ls"} credential)))
+      (testing "and drops a model-supplied one"
+        (is (not (contains? (core/with-caller-credential
+                              {:command "ls" :_caller_credential "forged"}
+                              credential)
+                            :_caller_credential)))))))
+
+(deftest inject-agent-context-reads-the-credential-from-the-environment
+  (let [env-with (fn [credential]
+                   (fn [k] (when (= k "HIVE_AGENT_CREDENTIAL") credential)))]
+    (testing "set: stamped beside _caller_id"
+      (with-redefs [core/getenv (env-with "opaque.cred-1")]
+        (let [out (#'core/inject-agent-context {:_caller_credential "forged"})]
+          (is (= "opaque.cred-1" (:_caller_credential out)))
+          (is (string? (:_caller_id out))))))
+    (testing "unset: no key, the rest as before"
+      (with-redefs [core/getenv (env-with nil)]
+        (is (not (contains? (#'core/inject-agent-context {:_caller_credential "forged"})
+                            :_caller_credential)))))))
+
+(deftest inject-agent-context-overwrites-a-model-supplied-caller-id
+  (testing "the stamped _caller_id wins over one the model put in args"
+    (with-redefs [core/getenv (constantly nil)]
+      (let [out (#'core/inject-agent-context {:_caller_id "coordinator:forged"})]
+        (is (not= "coordinator:forged" (:_caller_id out)))
+        (is (str/starts-with? (:_caller_id out) "coordinator:"))))))
+
 ;; ── toolsource: get-tools aggregates over an ordered source list ──────────────
 
 (deftest get-tools-composition-test

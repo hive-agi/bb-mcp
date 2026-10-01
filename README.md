@@ -206,6 +206,18 @@ client's cwd, and the nREPL port is resolved in this order:
 Set these in the client's server entry only when you need a non-default
 value. Never put `HIVE_MCP_DIR` in an MCP client config: bb-mcp does not read it.
 
+### Caller identity
+
+bb-mcp stamps every tool call it forwards to the hive with:
+
+| Argument | Source |
+|----------|--------|
+| `_caller_id` | `coordinator:<instance>` for a coordinator session, `<slave-id>:<instance>` for a ling (`BB_MCP_AGENT_ID`, `BB_MCP_CLIENT_ID` or `CLAUDE_SWARM_SLAVE_ID`). Self-asserted; always overwrites a value the model put in the arguments. |
+| `_caller_credential` | `HIVE_AGENT_CREDENTIAL`, the signed spawn credential the hive sets in the environment of a child it spawns. Opaque: bb-mcp never parses, logs or prints it. Present only when the variable is set and non-blank. A value the model put in the arguments is always dropped; the environment is the only source. |
+
+Do not set `HIVE_AGENT_CREDENTIAL` by hand or in an MCP client config: the
+hive mints it per spawn.
+
 ### Sixth-sense channel receptor
 
 With channels on, bb-mcp polls hive-agent's sixth sense over the same nREPL
