@@ -129,7 +129,27 @@ an executable `start-bb-mcp.sh`, that babashka is on PATH, and that each
 detected client's hive entry points at the anchor (flagging stale paths such as
 the real checkout, another user's home, leftover `HIVE_MCP_DIR` or pinned
 `args`). It also reports whether an nREPL answers on the resolved port (a
-warning only). It exits non-zero when a check fails.
+warning only), and whether a newer bb-mcp release exists (an `update` row,
+also a warning only). It exits non-zero when a check fails.
+
+### Updates
+
+Clients launch bb-mcp through the anchor, so an update is a fast-forward of the
+checkout it points at: `hive update` (refuses a checkout with local changes or
+off its tracked branch, then runs `bb-mcp setup --check`), or `git pull` in the
+checkout. On startup bb-mcp compares its `VERSION` with the newest `v*` release
+tag of `https://github.com/hive-agi/bb-mcp` and, when behind, prints one line
+on stderr (never stdout, the MCP channel):
+
+```
+bb-mcp 1.2.29 -> 1.2.30 available: run hive update (or git pull in <checkout>)
+```
+
+The lookup (`git ls-remote`, bounded to 2 s) runs in the background and never
+delays or breaks startup; offline it says nothing. The answer is cached for 24 h
+in `${XDG_CACHE_HOME:-~/.cache}/hive-mcp/bb-mcp-latest.edn`. On the cljw runtime
+`start-bb-mcp.sh` runs it as `bb-mcp notice` beside the server.
+`BB_MCP_NO_UPDATE_CHECK=1` turns it off.
 
 ### Manual configuration
 
@@ -180,6 +200,7 @@ client's cwd, and the nREPL port is resolved in this order:
 | `BB_MCP_NREPL_PORT` | nREPL port of the hive-mcp backend | `<project>/.nrepl-port`, else 7910 |
 | `BB_MCP_PROJECT_DIR` | Project directory (scopes tools; holds `.nrepl-port`) | the client's cwd |
 | `BB_MCP_TOOL_SCHEMA` | `full` advertises every tool parameter; `compact` advertises each tool's core parameters and still accepts the rest | `full` |
+| `BB_MCP_NO_UPDATE_CHECK` | `1` turns off the startup release notice (see [Updates](#updates)) | off |
 | `CLJW_BIN` | cljw binary for the cljw runtime | config.edn `:runtimes :cljw :binary`, then `cljw` on PATH |
 
 Set these in the client's server entry only when you need a non-default
