@@ -15,9 +15,13 @@
   #{"full" "compact"})
 
 (defn mode
-  "\"full\" or \"compact\" from an environment value; unset or unknown reads full."
+  "\"full\" or \"compact\" from an environment value; unset or unknown reads
+   compact. Compact is the default since the carto lab gate (2026-10-01, haiku,
+   12 trials per arm): tokens -43%, wall time -49%, pass rate 9/12 against
+   11/12, a gap inside noise. full stays one variable away for any client
+   that needs the whole union up front."
   [env-value]
-  (if (contains? modes env-value) env-value "full"))
+  (if (contains? modes env-value) env-value "compact"))
 
 (defn compact?
   "True when `env-value` selects the compact mode."
