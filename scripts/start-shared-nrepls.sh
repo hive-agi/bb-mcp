@@ -4,10 +4,13 @@
 
 set -euo pipefail
 
-# Define projects and their nREPL ports
+# Projects as name -> "dir:port:command". Checkout locations come from env:
+#   HIVE_MCP_SRC       hive-mcp checkout       (default: $HOME/hive-mcp)
+#   CLOJURE_ELISP_SRC  clojure-elisp checkout  (default: $HOME/clojure-elisp)
+# A project whose directory does not exist is skipped.
 declare -A PROJECTS=(
-    ["clojure-elisp"]="/home/lages/PP/clojure-elisp:7920:clojure -M:dev"
-    ["hive-mcp"]="/home/lages/dotfiles/gitthings/hive-mcp:7910:clojure -M:dev"
+    ["clojure-elisp"]="${CLOJURE_ELISP_SRC:-$HOME/clojure-elisp}:7920:clojure -M:dev"
+    ["hive-mcp"]="${HIVE_MCP_SRC:-$HOME/hive-mcp}:7910:clojure -M:dev"
     # Add more projects as needed
 )
 
@@ -16,6 +19,11 @@ start_nrepl() {
     local config="$2"
 
     IFS=':' read -r dir port cmd <<< "$config"
+
+    if [[ ! -d "$dir" ]]; then
+        echo "- $name: $dir not found, skipping"
+        return 0
+    fi
 
     # Check if already running
     if [[ -f "$dir/.nrepl-port" ]]; then

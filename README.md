@@ -75,48 +75,115 @@ When running swarm agents (multiple Claudes working in parallel), each agent nee
 
 ## Prerequisites
 
-- [Babashka](https://babashka.org/) v1.3+
-- [ripgrep](https://github.com/BurntSushi/ripgrep) (for grep tool)
-
-- [hive-mcp](https://github.com/BuddhiLW/hive-mcp) running with nREPL on port 7910
-
-- [hive-mcp](https://github.com/your-user/hive-mcp) running with nREPL on port 7910
-
+- [Babashka](https://babashka.org/) v1.3+ (required: `bb-mcp setup` and the `bb` runtime)
+- [ripgrep](https://github.com/BurntSushi/ripgrep) (for the grep tool)
+- [hive-mcp](https://github.com/hive-agi/hive-mcp), the JVM backend bb-mcp talks to, serving nREPL (default port 7910)
 
 ## Installation
 
-```bash
-# Clone the repository
-git clone https://github.com/BuddhiLW/bb-mcp.git
-cd bb-mcp
+Install with `curl -fsSL https://hive-mcp.com/install.sh | sh` then `hive setup`.
+`hive setup` installs bb-mcp, publishes it at `~/.local/share/hive-mcp/bb-mcp`,
+and registers `hive` with your MCP clients (Claude Code, Codex) through bb-mcp.
+Already have bb-mcp checked out somewhere? Run `<that checkout>/bb-mcp setup`:
+wherever bb-mcp lives becomes the reference. Verify with `bb-mcp setup --check`.
 
-# Add to Claude Code MCP config
-claude mcp add bb-mcp bb -- -m bb-mcp.core
+### The reference: one anchor for every client
+
+Wherever bb-mcp is checked out is the reference. `bb-mcp setup` publishes it at
+one well-known anchor, a symlink:
+
 ```
+~/.local/share/hive-mcp/bb-mcp  ->  <your bb-mcp checkout>
+```
+
+Every MCP client launches hive through the anchor, never through a
+user-specific checkout path, so moving or switching the checkout is one rerun
+of `bb-mcp setup` and no client config changes.
+
+### `bb-mcp setup`
+
+```bash
+<checkout>/bb-mcp setup [--client claude|codex|all] [--scope user|project] \
+                        [--port N] [--dry-run] [--check] [--json]
+# or, from the checkout:
+bb setup [same options]
+```
+
+Every step is idempotent and reported as a row (`ok`, `changed`, `planned`,
+`skipped`, `refused`, `failed`):
+
+| Step | What it does |
+|------|--------------|
+| `anchor` | Creates `~/.local/share/hive-mcp/` and the symlink to this checkout. A symlink pointing elsewhere is replaced and its previous target reported. A real directory or file at the anchor is refused, never deleted. |
+| `claude:user` | Default when the `claude` CLI is on PATH: `claude mcp remove --scope user hive`, then `claude mcp add --scope user hive -- ~/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh` (with `-e BB_MCP_NREPL_PORT=N` under `--port`). |
+| `claude:project` | With `--scope project`, run from a project dir: writes or merges `.mcp.json` in the cwd with the literal `${HOME}/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh` command, keeping every other server. |
+| `codex` | When `~/.codex` exists (or `--client codex`): upserts `[mcp_servers.hive]` in `~/.codex/config.toml` with the expanded anchor path, keeping every other table and comment, after backing the file up once as `config.toml.bak-<timestamp>`. |
+
+Your own env vars on an existing hive entry (for example `BB_MCP_RUNTIME`)
+are kept. `HIVE_MCP_DIR` is removed (bb-mcp never reads it), and
+`BB_MCP_NREPL_PORT` is set only when you pass `--port`. `--dry-run` prints the
+plan, ops included, without writing anything.
+
+`bb-mcp setup --check` verifies that the anchor resolves to a directory with
+an executable `start-bb-mcp.sh`, that babashka is on PATH, and that each
+detected client's hive entry points at the anchor (flagging stale paths such as
+the real checkout, another user's home, leftover `HIVE_MCP_DIR` or pinned
+`args`). It also reports whether an nREPL answers on the resolved port (a
+warning only). It exits non-zero when a check fails.
+
+### Manual configuration
+
+For a client that expands env vars in its JSON config (Claude Code's
+`.mcp.json` does):
+
+```json
+{
+  "mcpServers": {
+    "hive": {
+      "command": "${HOME}/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh"
+    }
+  }
+}
+```
+
+For a client without expansion, write the expanded absolute path of the anchor
+(`/home/<you>/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh`), never the path of
+the real checkout. No args are needed, and env only when non-default. See
+[`examples/mcp.json.example`](examples/mcp.json.example).
+
+### The backend
+
+bb-mcp is a **client**: it connects to an nREPL the hive-mcp JVM is already
+serving, and it does not spawn or respawn one. Start the hive-mcp backend
+(nREPL on 7910 by default) yourself; `hive setup` documents how. When it is
+down, every tool call fails with `could not connect to 'localhost:7910'` until
+the backend is started. That message means the backend, not the arguments of
+the call that reported it.
 
 ## Configuration
 
-### nREPL Port Resolution
+### Project and nREPL port resolution
 
-bb-mcp finds the nREPL port in this order:
+`start-bb-mcp.sh` takes no arguments. The project directory defaults to the
+client's cwd, and the nREPL port is resolved in this order:
 
-1. **Explicit parameter** - `port` in tool call
-2. **Environment variable** - `BB_MCP_NREPL_PORT`
-3. **.nrepl-port file** - In `BB_MCP_PROJECT_DIR` or current directory
-4. **Default** - Port 7910 (hive-mcp)
+1. **Explicit parameter**: `port` in a tool call
+2. **Environment variable**: `BB_MCP_NREPL_PORT`
+3. **.nrepl-port file**: in `BB_MCP_PROJECT_DIR` (the client's cwd by default)
+4. **Default**: port 7910 (hive-mcp)
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `BB_MCP_NREPL_PORT` | nREPL port to connect to | 7910 |
-| `BB_MCP_PROJECT_DIR` | Directory for .nrepl-port lookup | Current dir |
+| `BB_MCP_RUNTIME` | `cljw` (ClojureWasm) or `bb` (babashka). cljw falls back to bb when no usable cljw is found. | `cljw` |
+| `BB_MCP_NREPL_PORT` | nREPL port of the hive-mcp backend | `<project>/.nrepl-port`, else 7910 |
+| `BB_MCP_PROJECT_DIR` | Project directory (scopes tools; holds `.nrepl-port`) | the client's cwd |
+| `BB_MCP_TOOL_SCHEMA` | `full` advertises every tool parameter; `compact` advertises each tool's core parameters and still accepts the rest | `full` |
+| `CLJW_BIN` | cljw binary for the cljw runtime | config.edn `:runtimes :cljw :binary`, then `cljw` on PATH |
 
-bb-mcp is a **client**: it connects to an nREPL the hive-mcp coordinator is
-already serving, and it does not spawn or respawn one. When the coordinator is
-down, every tool call fails with `could not connect to 'localhost:7910'` until
-the coordinator is started by hand. That message means the coordinator, not the
-arguments of the call that reported it.
+Set these in the client's server entry only when you need a non-default
+value. Never put `HIVE_MCP_DIR` in an MCP client config: bb-mcp does not read it.
 
 ### Sixth-sense channel receptor
 
@@ -192,6 +259,9 @@ When hive-mcp adds new tools, bb-mcp picks them up automatically on next startup
 
 ### As MCP Server
 
+MCP clients run `~/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh` (see
+Installation). By hand, from the checkout:
+
 ```bash
 # Via bb task
 bb mcp
@@ -200,42 +270,27 @@ bb mcp
 bb -m bb-mcp.core
 ```
 
-### Connection Management
-
-bb-mcp uses **state-based detection** to manage the hive-mcp connection:
-
-| State | Condition | Action |
-|-------|-----------|--------|
-| `:ready` | Port listening | Connect immediately (0 latency) |
-| `:starting` | Lock file or process exists | Wait with exponential backoff |
-| `:not-running` | No process found | Spawn hive-mcp and wait |
-
-This eliminates race conditions and ensures reliable startup even when multiple bb-mcp instances start simultaneously.
-
-Logs go to `~/.config/hive-mcp/server.log`.
-
 ## Project Structure
 
 ```
 bb-mcp/
-├── bb.edn                    # Babashka deps and tasks
+├── bb-mcp                    # Entry: MCP server, or `bb-mcp setup`
+├── start-bb-mcp.sh           # Launcher every MCP client runs (via the anchor)
+├── bb.edn                    # Tasks: mcp, setup, test
 ├── src/bb_mcp/
 │   ├── core.clj              # Main entry, MCP message loop
-│   ├── protocol.clj          # JSON-RPC protocol handling
-│   ├── nrepl_spawn.clj       # Auto-spawn hive-mcp nREPL
-│   ├── test_runner.clj       # Test runner
-│   └── tools/
-│       ├── bash.clj          # Native: shell execution
-│       ├── file.clj          # Native: file operations
-│       ├── grep.clj          # Native: ripgrep wrapper
-│       ├── nrepl.clj         # nREPL client (bencode)
-│       ├── emacs.clj         # Emacs tools facade
-│       └── emacs/
-│           └── dynamic.clj   # Dynamic tool loading from hive-mcp
-└── test/                     # Tests
+│   ├── protocol.clj          # JSON-RPC over stdio
+│   ├── setup.clj             # `bb-mcp setup` pipeline (CLI)
+│   ├── setup/                # model (pure plan), clients (registry), toml, io (boundary)
+│   ├── host/                 # Runtime ports (bb, cljw)
+│   ├── sense/                # Sixth-sense channel receptor
+│   ├── wire/                 # bencode
+│   └── tools/                # bash, nrepl client, hive (dynamic tools from hive-mcp)
+└── test/                     # Tests (bb test)
 ```
 
-The `emacs/` directory is minimal - all Emacs tools are loaded dynamically from hive-mcp at runtime, eliminating code duplication.
+All hive tools are loaded dynamically from hive-mcp at runtime, so there is
+no static copy of them here.
 
 ## Development
 
@@ -243,8 +298,8 @@ The `emacs/` directory is minimal - all Emacs tools are loaded dynamically from 
 # Run tests
 bb test
 
-# Start REPL for development
-bb nrepl
+# Start an nREPL server for development
+bb nrepl-server
 ```
 
 ### Adding New Tools
