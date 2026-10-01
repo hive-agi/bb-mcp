@@ -21,12 +21,16 @@
    :required ["command"]})
 
 (deftest mode-reads-the-environment-value
-  (is (= "full" (compact/mode nil)))
-  (is (= "full" (compact/mode "")))
-  (is (= "full" (compact/mode "sometimes")))
+  (testing "compact is the default"
+    (is (= "compact" (compact/mode nil)))
+    (is (= "compact" (compact/mode "")))
+    (is (= "compact" (compact/mode "sometimes")))
+    (is (compact/compact? nil)))
+  (testing "full is an explicit opt-out"
+    (is (= "full" (compact/mode "full")))
+    (is (not (compact/compact? "full"))))
   (is (= "compact" (compact/mode "compact")))
-  (is (compact/compact? "compact"))
-  (is (not (compact/compact? nil))))
+  (is (compact/compact? "compact")))
 
 (deftest compact-tool-keeps-core-drops-the-rest-and-stays-open
   (let [t (compact/compact-tool full core)]

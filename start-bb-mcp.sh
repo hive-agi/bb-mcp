@@ -12,7 +12,7 @@
 #   BB_MCP_PROJECT_DIR - Project directory (default: $1 or cwd)
 #   BB_MCP_NREPL_PORT  - nREPL port (default: from .nrepl-port or $2)
 #   BB_MCP_RUNTIME    - cljw (default) or bb
-#   BB_MCP_TOOL_SCHEMA - full (default) or compact: advertise only each tool's core
+#   BB_MCP_TOOL_SCHEMA - compact (default) or full: compact advertises only each tool's core
 #                        parameters and keep the rest accepted (bb-mcp.tools.hive.compact)
 #   CLJW_BIN          - cljw binary (default: config.edn :runtimes :cljw :binary, then every cljw on PATH)
 #   EMACS_SOCKET_NAME - Emacs daemon socket name for isolation (optional)
