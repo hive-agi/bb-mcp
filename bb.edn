@@ -7,5 +7,9 @@
   mcp {:doc "Start MCP server on stdio"
        :task (exec 'bb-mcp.core/-main)}
 
+  setup {:doc "Publish this checkout at ~/.local/share/hive-mcp/bb-mcp and register hive with MCP clients (--help)"
+         :task (apply (requiring-resolve 'bb-mcp.setup/-main) *command-line-args*)}
+
   test {:doc "Run tests"
-        :task (shell "bb --config bb.edn -m bb-mcp.test-runner")}}}
+        :task (do (shell "bb --config bb.edn -m bb-mcp.test-runner")
+                  (shell "bb --config bb.edn -m bb-mcp.setup.suite"))}}}

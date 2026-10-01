@@ -1,5 +1,15 @@
 #!/usr/bin/env bb
+;; bb-mcp entry point; runs from any cwd (the classpath is this checkout's src).
+;;
+;;   bb-mcp                 the MCP server on stdio
+;;   bb-mcp setup [opts]    publish this checkout at ~/.local/share/hive-mcp/bb-mcp
+;;                          and register hive with MCP clients (bb-mcp setup --help)
 
-(require '[bb-mcp.core :as core])
+(require '[babashka.classpath :as cp]
+         '[babashka.fs :as fs])
 
-(core/-main)
+(cp/add-classpath (str (fs/path (fs/parent (fs/real-path *file*)) "src")))
+
+(if (= "setup" (first *command-line-args*))
+  (apply (requiring-resolve 'bb-mcp.setup/-main) (rest *command-line-args*))
+  ((requiring-resolve 'bb-mcp.core/-main)))
