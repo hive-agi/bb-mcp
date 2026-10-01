@@ -1,49 +1,7 @@
 {
   "mcpServers": {
-    "COMMENT": "=== LIGHTWEIGHT bb-mcp SERVERS (50MB each) ===",
-
-    "bb-mcp-clojure-elisp": {
-      "command": "/home/lages/PP/bb-mcp/start-bb-mcp.sh",
-      "args": ["/home/lages/PP/clojure-elisp"],
-      "env": {
-        "BB_MCP_NREPL_PORT": "7920"
-      }
-    },
-
-    "bb-mcp-hive-mcp": {
-      "command": "/home/lages/PP/bb-mcp/start-bb-mcp.sh",
-      "args": ["/home/lages/dotfiles/gitthings/hive-mcp"],
-      "env": {
-        "BB_MCP_NREPL_PORT": "7910"
-      }
-    },
-
-    "bb-mcp-inventory": {
-      "command": "/home/lages/PP/bb-mcp/start-bb-mcp.sh",
-      "args": ["/home/lages/PP/funeraria/inventory"],
-      "env": {
-        "BB_MCP_NREPL_PORT": "7999"
-      }
-    },
-
-    "COMMENT2": "=== NON-CLOJURE SERVERS (keep as-is) ===",
-
-    "firebird-funeraria": {
-      "command": "/home/lages/PP/funeraria/sisf/mcp-ff/start-mcp.sh",
-      "args": [],
-      "env": {
-        "DB_HOST": "funerariafrancana.no-ip.org",
-        "DB_PORT": "8181",
-        "DB_USER": "SYSDBA",
-        "DB_PASSWORD": "***",
-        "DB_PATH": "/home/sisf/dados/dbsisf.fdb",
-        "DB_ROLE": "ACCESS"
-      }
-    },
-
-    "hive-mcp": {
-      "command": "/home/lages/dotfiles/gitthings/hive-mcp/start-mcp.sh",
-      "args": []
+    "hive": {
+      "command": "${HOME}/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh"
     }
   }
 }

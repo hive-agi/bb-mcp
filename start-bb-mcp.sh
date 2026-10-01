@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Start bb-mcp with project configuration
 #
-# Usage: start-bb-mcp.sh /path/to/project [nrepl-port]
+# Usage: start-bb-mcp.sh [/path/to/project [nrepl-port]]
+#
+# MCP clients run it with NO args through the anchor
+# ~/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh (see `bb-mcp setup`): the
+# project dir defaults to the client's cwd and the nREPL port to
+# <project>/.nrepl-port, else 7910.
 #
 # Environment variables:
 #   BB_MCP_PROJECT_DIR - Project directory (default: $1 or cwd)
