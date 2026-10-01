@@ -358,9 +358,35 @@
                     (hp/adapter-ns) ") — bash runs in the hive-mcp JVM, "
                     "over the nREPL socket on port " (nrepl/get-nrepl-port) ".")))))
 
+(defn- start-release-notice!
+  "Tell the user, on stderr, when a newer bb-mcp release exists.
+
+  Everything, loading the namespaces included, happens on a daemon thread,
+  so the MCP handshake never waits for it. It is resolved rather than
+  required: it needs babashka.process, which a runtime without a subprocess
+  surface (cljw) lacks. For that runtime start-bb-mcp.sh runs `bb-mcp notice`
+  beside it and sets BB_MCP_RELEASE_NOTICE=launcher, so it is said once.
+  BB_MCP_NO_UPDATE_CHECK=1 turns it off."
+  []
+  (when-not (System/getenv "BB_MCP_RELEASE_NOTICE")
+    (try
+      (doto (Thread. ^Runnable
+                     (fn []
+                       (try
+                         ((requiring-resolve 'bb-mcp.update.io/notify!)
+                          ((requiring-resolve 'bb-mcp.update.io/system))
+                          ((requiring-resolve 'bb-mcp.setup/checkout-dir)))
+                         ;; A release notice must never break the server.
+                         (catch Exception _no-notice nil))))
+        (.setDaemon true)
+        (.start))
+      ;; No threads on this runtime: no notice, the server runs as before.
+      (catch Exception _no-threads nil))))
+
 (defn -main [& _args]
   (warn-unless-nrepl-reachable!)
   (warn-where-bash-runs!)
+  (start-release-notice!)
   (hive/init!)
   (run-server))
 

@@ -24,6 +24,8 @@
 #   BB_MCP_SENSE_PROJECTS / BB_MCP_SENSE_CLASSES - comma lists narrowing the senses
 #                           (classes e.g. ask,blocked,completed,truncated,error)
 #   BB_MCP_SENSE_POLL_MS  - poll interval (default 1000); BB_MCP_SENSE_REPLAY=1 skips priming
+#   BB_MCP_NO_UPDATE_CHECK - 1 turns off the one-line stderr notice printed when a
+#                           newer bb-mcp release exists (checked at most once a day)
 
 set -euo pipefail
 
@@ -100,8 +102,20 @@ start_bb() {
     exec bb -m bb-mcp.core
 }
 
+# The release notice needs a subprocess (git ls-remote), which cljw lacks, so
+# on cljw it runs as a detached `bb-mcp notice` beside the server: stdin and
+# stdout closed (stdout is the MCP channel), stderr shared. It never delays the
+# exec below, and BB_MCP_RELEASE_NOTICE tells the server it was already done.
+start_release_notice() {
+    case "${BB_MCP_NO_UPDATE_CHECK:-}" in ""|0|false|FALSE) ;; *) return 0 ;; esac
+    command -v bb >/dev/null 2>&1 || return 0
+    export BB_MCP_RELEASE_NOTICE=launcher
+    (bb "$SCRIPT_DIR/bb-mcp" notice </dev/null >/dev/null &) || true
+}
+
 start_cljw() {
     export BB_MCP_SESSION_ID="${BB_MCP_SESSION_ID:-$PPID}"
+    start_release_notice
     exec "$1" -cp src -m bb-mcp.core
 }
 
