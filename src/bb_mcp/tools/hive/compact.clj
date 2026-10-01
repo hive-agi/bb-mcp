@@ -26,8 +26,9 @@
 
 (defn- hint [dropped]
   (str " Compact schema: only the shared parameters are listed here; each command"
-       " also accepts its own (" dropped " more), named by command='help' and,"
-       " for carto, by 'carto describe'."))
+       " also accepts its own (" dropped " more). command='help' lists the commands;"
+       " for a carto command, command='carto describe' of='<command>' returns its"
+       " :params."))
 
 (defn compact-tool
   "TOOL with :schema reduced to CORE-SCHEMA's properties, open to further

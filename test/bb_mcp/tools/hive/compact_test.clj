@@ -40,6 +40,8 @@
     (testing "the description says how many were dropped and where to find them"
       (is (re-find #"\(2 more\)" (:description t)))
       (is (re-find #"command='help'" (:description t)))
+      (is (re-find #"command='carto describe' of='<command>' returns its :params"
+                   (:description t)))
       (is (.startsWith ^String (:description t) "Code intelligence.")))))
 
 (deftest compact-tool-is-identity-when-nothing-would-change
