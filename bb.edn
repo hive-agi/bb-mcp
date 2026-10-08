@@ -1,6 +1,6 @@
 {:paths ["src" "test"]
  :deps {;; cheshire is built into babashka
-        }
+        io.github.hive-agi/hive-test {:mvn/version "0.4.11"}}
  :tasks
  {:requires ([babashka.fs :as fs])
 

@@ -11,7 +11,8 @@
             [bb-mcp.guard :as guard]
             [bb-mcp.piggyback :as piggyback]
             [bb-mcp.sense.receptor :as receptor]
-            [bb-mcp.async :as async]))
+            [bb-mcp.async :as async]
+            [bb-mcp.resources :as resources]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -292,7 +293,21 @@
   (call-tool id (:name params) (:arguments params)))
 
 (defmethod handle-method "resources/list" [{:keys [id]}]
-  (proto/resources-list-response id []))
+  (try
+    (proto/resources-list-response id (resources/list-resources resources/*source*))
+    (catch Exception e
+      (proto/json-rpc-error id -32603 (str "Resource source unavailable: " (ex-message e))))))
+
+(defmethod handle-method "resources/read" [{:keys [id params]}]
+  (let [uri (:uri params)]
+    (if-not (and (string? uri) (not (str/blank? uri)))
+      (proto/json-rpc-error id -32602 "Resource URI must be a non-blank string")
+      (try
+        (if-let [content (resources/read-resource resources/*source* uri)]
+          (proto/resources-read-response id content)
+          (proto/json-rpc-error id -32002 (str "Resource not found: " uri)))
+        (catch Exception e
+          (proto/json-rpc-error id -32603 (str "Resource read failed: " (ex-message e))))))))
 
 (defmethod handle-method "prompts/list" [{:keys [id]}]
   (proto/json-rpc-response id {:prompts []}))

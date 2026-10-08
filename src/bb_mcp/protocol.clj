@@ -56,6 +56,11 @@
 (defn resources-list-response [id resources]
   (json-rpc-response id {:resources resources}))
 
+(defn resources-read-response
+  "MCP resources/read result. A resource read returns a vector of contents."
+  [id content]
+  (json-rpc-response id {:contents [content]}))
+
 ;; Stdio communication
 (defn read-message
   "Read a JSON-RPC message from stdin.

@@ -1,0 +1,8 @@
+{:invalid {:error {:code -32602 :message "Resource URI must be a non-blank string"}
+           :id 4 :jsonrpc "2.0"}
+ :list {:id 1 :jsonrpc "2.0"
+        :result {:resources [{:uri "workflow://demo" :name "Demo" :mimeType "text/plain"}]}}
+ :missing {:error {:code -32002 :message "Resource not found: workflow://missing"}
+           :id 3 :jsonrpc "2.0"}
+ :read {:id 2 :jsonrpc "2.0"
+        :result {:contents [{:uri "workflow://demo" :mimeType "text/plain" :text "demo AST"}]}}}
