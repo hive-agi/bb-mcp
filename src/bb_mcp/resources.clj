@@ -1,9 +1,12 @@
 (ns bb-mcp.resources
-  "Resource source boundary. Addons declare :resources via the optional
-   hive-addon.protocol/resources method as {:uri :name :mimeType :handler}
-   descriptors. The handler accepts the URI and returns text or MCP content.
+  "Resource source boundary. Addons declare :resources as a sequence of
+   {:uri :name :mimeType :handler} maps on their IAddon instance. The handler
+   accepts the requested URI and returns text or an MCP content map.
    Only active addons advertising :resources participate. The JVM owns the
-   handlers; this client carries only data across the nREPL boundary."
+   handlers; this client carries only data across the nREPL boundary.
+
+   The declaration is now read through the optional hive-addon.protocol/resources
+   method, rather than directly through a record's :resources field."
   (:require [bb-mcp.tools.nrepl :as nrepl]
             [clojure.edn :as edn]))
 
