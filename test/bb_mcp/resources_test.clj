@@ -87,3 +87,40 @@
                (is (every? #(clojure.string/includes? % "hive-addon.resources/resources") forms))
                (is (clojure.string/includes? (second forms) "hive-addon.resources/read-resource"))
                (is (every? #(clojure.string/includes? % "java.io.FileNotFoundException") forms))))})
+
+(deftest adapter-executes-against-stub-host
+  (let [host-ns 'hive-mcp.addons.core
+        contract-ns 'hive-addon.resources
+        reads (atom [])
+        addon {:id :stub}
+        listed [{:uri "workflow://demo" :name "Demo" :mimeType "text/plain"}]
+        source (resources/->HiveResourceSource eval)
+        request (fn [uri] (binding [resources/*source* source]
+                            (core/handle-method {:method "resources/read" :id 7
+                                                 :params {:uri uri}})))
+        listing (fn [] (binding [resources/*source* source]
+                         (core/handle-method {:method "resources/list" :id 6})))]
+    (try
+      ;; A legacy host has no optional namespace; the generated form must
+      ;; execute, not merely be printable, without resolving the registry.
+      (is (= [] (get-in (listing) [:result :resources])))
+      (is (= -32002 (get-in (request "workflow://demo") [:error :code])))
+      (create-ns host-ns)
+      (intern host-ns 'list-addons (fn [] [{:name "stub" :state :active
+                                            :capabilities #{:resources}}]))
+      (intern host-ns 'get-addon (fn [_] addon))
+      (create-ns contract-ns)
+      (intern contract-ns 'resources (fn [_] listed))
+      (intern contract-ns 'read-resource
+              (fn [_ uri] (swap! reads conj uri) "demo AST"))
+      (is (= listed (get-in (listing) [:result :resources])))
+      (is (= "demo AST" (get-in (request "workflow://demo")
+                                  [:result :contents 0 :text])))
+      (is (= ["workflow://demo"] @reads))
+      (doseq [uri ["workflow://missing" "file:///etc/passwd"
+                   "workflow://a/../demo" "unknown://demo"]]
+        (is (= -32002 (get-in (request uri) [:error :code])) uri))
+      (is (= ["workflow://demo"] @reads))
+      (finally
+        (remove-ns contract-ns)
+        (remove-ns host-ns)))))
