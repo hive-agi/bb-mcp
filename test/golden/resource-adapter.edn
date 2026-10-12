@@ -1,0 +1,3 @@
+{:workflow
+ {:list [{:uri "workflow://demo", :name "Demo"}],
+  :read {:uri "workflow://demo", :text "demo AST"}}}

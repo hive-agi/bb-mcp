@@ -1,7 +1,7 @@
 (ns bb-mcp.resources
-  "Resource source boundary. Addons declare :resources as a sequence of
-   {:uri :name :mimeType :handler} maps on their IAddon instance. The handler
-   accepts the requested URI and returns text or an MCP content map.
+  "Resource source boundary. Addons declare :resources via the optional
+   hive-addon.protocol/resources method as {:uri :name :mimeType :handler}
+   descriptors. The handler accepts the URI and returns text or MCP content.
    Only active addons advertising :resources participate. The JVM owns the
    handlers; this client carries only data across the nREPL boundary."
   (:require [bb-mcp.tools.nrepl :as nrepl]
@@ -21,10 +21,10 @@
       (throw (ex-info "Resource source unavailable" {:cause result}))
       (edn/read-string (edn/read-string result)))))
 
-(defrecord HiveResourceSource []
+(defrecord HiveResourceSource [evaluate]
   ResourceSource
   (list-resources [_]
-    (hive-eval
+    (evaluate
      '(->> ((requiring-resolve 'hive-mcp.addons.core/list-addons))
            (filter (fn [entry] (and (= :active (:state entry))
                                     (contains? (:capabilities entry) :resources))))
@@ -32,11 +32,12 @@
                      (let [addon ((requiring-resolve 'hive-mcp.addons.core/get-addon)
                                   (:name entry))]
                        (map (fn [r] (select-keys r [:uri :name :description :mimeType]))
-                            (:resources addon)))))
+                            (try ((requiring-resolve 'hive-addon.protocol/resources) addon)
+                                 (catch AbstractMethodError _ []))))))
            (filter (fn [r] (and (string? (:uri r)) (string? (:name r)))))
            vec)))
   (read-resource [_ uri]
-    (hive-eval
+    (evaluate
      `(let [uri# ~uri]
         (some (fn [entry#]
                 (when (and (= :active (:state entry#))
@@ -44,9 +45,10 @@
                   (let [addon# ((requiring-resolve 'hive-mcp.addons.core/get-addon)
                                 (:name entry#))]
                     (when-let [r# (some (fn [r#] (when (= uri# (:uri r#)) r#))
-                                        (:resources addon#))]
+                                        (try ((requiring-resolve 'hive-addon.protocol/resources) addon#)
+                                             (catch AbstractMethodError _# [])))]
                       (when-let [handler# (:handler r#)]
-                        (let [value# (handler# uri#)]
+                        (when-some [value# (handler# uri#)]
                           (if (map? value#)
                             (merge {:uri uri#} value#)
                             {:uri uri# :text (str value#)})))))))
@@ -54,4 +56,4 @@
 
 (def ^:dynamic *source*
   "Port for resource lookup; bind to an in-memory stub in tests."
-  (->HiveResourceSource))
+  (->HiveResourceSource hive-eval))

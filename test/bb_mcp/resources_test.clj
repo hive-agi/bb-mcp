@@ -56,3 +56,32 @@
                                   (read-resource [_ _] (throw (ex-info "offline" {}))))]
       (is (= -32603 (get-in (core/handle-method list-request) [:error :code])))
       (is (= -32603 (get-in (core/handle-method read-request) [:error :code]))))))
+
+(defn adapter-query [uri]
+  (let [forms (atom [])
+        source (resources/->HiveResourceSource
+                (fn [form]
+                  (swap! forms conj (pr-str form))
+                  (if (= 1 (count @forms))
+                    [{:uri "workflow://demo" :name "Demo"}]
+                    {:uri uri :text "demo AST"})))]
+    {:list (resources/list-resources source)
+     :read (resources/read-resource source uri)
+     :forms @forms}))
+
+(deftrifecta addon-protocol-adapter
+  #'adapter-query
+  {:golden-path "test/golden/resource-adapter.edn"
+   :cases {:workflow "workflow://demo"}
+   :xf (fn [r] (dissoc r :forms))
+   :gen (gen/return "workflow://demo")
+   :pred (fn [r] (and (= "workflow://demo" (get-in r [:list 0 :uri]))
+                      (= 2 (count (:forms r)))
+                      (every? #(clojure.string/includes? % "hive-addon.protocol/resources")
+                              (:forms r))))
+   :mutations [["no-adapter" (fn [_] {:list [] :read nil :forms []})]]
+   :assert (fn []
+             (let [{:keys [list read forms]} (adapter-query "workflow://demo")]
+               (is (= "Demo" (:name (first list))))
+               (is (= "demo AST" (:text read)))
+               (is (every? #(clojure.string/includes? % "hive-addon.protocol/resources") forms))))})
