@@ -28,34 +28,46 @@
   ResourceSource
   (list-resources [_]
     (evaluate
-     '(->> ((requiring-resolve 'hive-mcp.addons.core/list-addons))
-           (filter (fn [entry] (and (= :active (:state entry))
-                                    (contains? (:capabilities entry) :resources))))
-           (mapcat (fn [entry]
-                     (let [addon ((requiring-resolve 'hive-mcp.addons.core/get-addon)
-                                  (:name entry))]
-                       (map (fn [r] (select-keys r [:uri :name :description :mimeType]))
-                            (try ((requiring-resolve 'hive-addon.protocol/resources) addon)
-                                 (catch AbstractMethodError _ []))))))
-           (filter (fn [r] (and (string? (:uri r)) (string? (:name r)))))
-           vec)))
+     '(let [accessor (try (requiring-resolve 'hive-addon.resources/resources)
+                          (catch java.io.FileNotFoundException _ nil))
+            allowed? (fn [uri] (and (string? uri)
+                                    (or (clojure.string/starts-with? uri "workflow://")
+                                        (clojure.string/starts-with? uri "verb://"))
+                                    (not (clojure.string/includes? uri ".."))))]
+        (if-not accessor
+          []
+          (->> ((requiring-resolve 'hive-mcp.addons.core/list-addons))
+               (filter (fn [entry] (and (= :active (:state entry))
+                                        (contains? (:capabilities entry) :resources))))
+               (mapcat (fn [entry]
+                         (let [addon ((requiring-resolve 'hive-mcp.addons.core/get-addon)
+                                      (:name entry))]
+                           (map (fn [r] (select-keys r [:uri :name :description :mimeType]))
+                                (accessor addon)))))
+               (filter (fn [r] (and (allowed? (:uri r)) (string? (:name r)))))
+               vec)))))
   (read-resource [_ uri]
     (evaluate
-     `(let [uri# ~uri]
-        (some (fn [entry#]
-                (when (and (= :active (:state entry#))
-                           (contains? (:capabilities entry#) :resources))
-                  (let [addon# ((requiring-resolve 'hive-mcp.addons.core/get-addon)
-                                (:name entry#))]
-                    (when-let [r# (some (fn [r#] (when (= uri# (:uri r#)) r#))
-                                        (try ((requiring-resolve 'hive-addon.protocol/resources) addon#)
-                                             (catch AbstractMethodError _# [])))]
-                      (when-let [handler# (:handler r#)]
-                        (when-some [value# (handler# uri#)]
+     `(let [uri# ~uri
+            accessor# (try (requiring-resolve 'hive-addon.resources/resources)
+                           (catch java.io.FileNotFoundException _# nil))
+            reader# (try (requiring-resolve 'hive-addon.resources/read-resource)
+                         (catch java.io.FileNotFoundException _# nil))]
+        (when (and accessor# reader# (string? uri#)
+                   (or (clojure.string/starts-with? uri# "workflow://")
+                       (clojure.string/starts-with? uri# "verb://"))
+                   (not (clojure.string/includes? uri# "..")))
+          (some (fn [entry#]
+                  (when (and (= :active (:state entry#))
+                             (contains? (:capabilities entry#) :resources))
+                    (let [addon# ((requiring-resolve 'hive-mcp.addons.core/get-addon)
+                                  (:name entry#))]
+                      (when (some (fn [r#] (= uri# (:uri r#))) (accessor# addon#))
+                        (when-some [value# (reader# addon# uri#)]
                           (if (map? value#)
                             (merge {:uri uri#} value#)
-                            {:uri uri# :text (str value#)})))))))
-              ((requiring-resolve 'hive-mcp.addons.core/list-addons)))))))
+                            {:uri uri# :text (str value#)}))))))
+                ((requiring-resolve 'hive-mcp.addons.core/list-addons))))))))
 
 (def ^:dynamic *source*
   "Port for resource lookup; bind to an in-memory stub in tests."

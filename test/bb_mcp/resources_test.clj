@@ -77,11 +77,13 @@
    :gen (gen/return "workflow://demo")
    :pred (fn [r] (and (= "workflow://demo" (get-in r [:list 0 :uri]))
                       (= 2 (count (:forms r)))
-                      (every? #(clojure.string/includes? % "hive-addon.protocol/resources")
+                      (every? #(clojure.string/includes? % "hive-addon.resources/resources")
                               (:forms r))))
    :mutations [["no-adapter" (fn [_] {:list [] :read nil :forms []})]]
    :assert (fn []
              (let [{:keys [list read forms]} (adapter-query "workflow://demo")]
                (is (= "Demo" (:name (first list))))
                (is (= "demo AST" (:text read)))
-               (is (every? #(clojure.string/includes? % "hive-addon.protocol/resources") forms))))})
+               (is (every? #(clojure.string/includes? % "hive-addon.resources/resources") forms))
+               (is (clojure.string/includes? (second forms) "hive-addon.resources/read-resource"))
+               (is (every? #(clojure.string/includes? % "java.io.FileNotFoundException") forms))))})
