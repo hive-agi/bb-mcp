@@ -341,6 +341,23 @@
   (receptor/disarm! r)
   (select-receptor init-request))
 
+(defn- answer-safely
+  "The response to `msg`, or, when handling it throws ANY Throwable (a
+   StackOverflowError or an AssertionError as much as an Exception), a
+   -32603 error for a request and nothing for a notification. One request
+   can never end the session; the cause goes to stderr."
+  [msg]
+  (try
+    (handle-method msg)
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "bb-mcp: " (:method msg) " failed: "
+                      (.getName (class t)) ": " (ex-message t))))
+      (when (some? (:id msg))
+        (proto/json-rpc-error (:id msg) -32603
+                              (str "Internal error: " (.getName (class t))
+                                   (when-let [m (ex-message t)] (str ": " m))))))))
+
 (defn run-server
   "Read, dispatch, and write MCP messages over `transport` until input ends.
 
@@ -350,7 +367,8 @@
    the first message AFTER it, i.e. once the handshake is done, so no channel
    event can precede the initialize result. It is disarmed when input ends.
    Every write, response or notification, goes through one serialised
-   transport."
+   transport. A request whose handling throws is answered with an error
+   (see `answer-safely`) and the loop reads the next message."
   ([] (run-server (proto/stdio-transport)))
   ([transport] (run-server transport {}))
   ([transport {:keys [select-receptor] :or {select-receptor env-receptor}}]
@@ -359,7 +377,7 @@
        (if-let [msg (proto/read-msg t)]
          (let [initialize? (= "initialize" (:method msg))
                r (if initialize? (open-session r select-receptor msg) r)]
-           (when-let [response (handle-method (in-session r msg))]
+           (when-let [response (answer-safely (in-session r msg))]
              (proto/write-msg t response))
            (when-not initialize? (receptor/arm! r t))
            (recur r))

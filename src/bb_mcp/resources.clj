@@ -26,31 +26,49 @@
 (def ^:private segment
   "Regex for one path segment: visible ASCII only, with no percent sign (so
    no encoding, single or double), backslash or slash, and not made of dots
-   alone (so no current or parent segment). Dots inside a name are fine."
-  "(?!\\.+(?:/|\\z))[!-~&&[^%\\\\/]]+")
+   alone (so no current or parent segment). Dots inside a name are fine.
+   The character run is possessive: it never backtracks, and since it cannot
+   consume a slash, giving characters back could never make a match."
+  "(?!\\.++(?:/|\\z))[!-~&&[^%\\\\/]]++")
+
+(def max-uri-length
+  "The longest URI this server lists or reads, in characters. Checked before
+   the pattern runs, on both sides of the socket, so no input size reaches
+   the regex engine unbounded."
+  2048)
 
 (def uri-pattern
   "The whole policy as one regex string, shared by `allowed-uri?` and
    `uri-policy-form`: a scheme from `schemes`, then one or more `segment`s
    joined by single slashes. An allowlist: whatever it does not describe
    (an empty or absolute path, whitespace, control or non-ASCII characters)
-   is refused."
+   is refused.
+
+   Every repetition is possessive (`++`, `*+`). A greedy `(?:/segment)*`
+   makes java.util.regex recurse once per segment, so a URI of some tens of
+   thousands of segments overflowed the stack. Possessive repetition loops
+   instead, and is equivalent here: what follows the group is the end of
+   input, which a returned segment could never reach."
   (str "(?:" (str/join "|" (map #(java.util.regex.Pattern/quote %) schemes)) ")"
-       segment "(?:/" segment ")*"))
+       segment "(?:/" segment ")*+"))
 
 (defn allowed-uri?
-  "True when `uri` is a string that `uri-pattern` matches in full. Anything
-   else is never sent to the host."
+  "True when `uri` is a string of at most `max-uri-length` characters that
+   `uri-pattern` matches in full. Anything else is never sent to the host.
+   The length is checked first, so the regex never sees an unbounded input."
   [uri]
   (and (string? uri)
+       (<= (count uri) max-uri-length)
        (some? (re-matches (re-pattern uri-pattern) uri))))
 
 (def uri-policy-form
   "`allowed-uri?` as a form the host evaluates, so the JVM applies the same
-   policy to what its addons declare. It carries the same `uri-pattern`
-   string; the policy test holds the two verdicts equal."
+   policy to what its addons declare. It carries the same `max-uri-length`
+   and the same possessive `uri-pattern` string; the policy test holds the
+   two verdicts equal."
   `(fn [uri#]
      (and (string? uri#)
+          (<= (count uri#) ~max-uri-length)
           (some? (re-matches (re-pattern ~uri-pattern) uri#)))))
 
 (defn- hive-eval

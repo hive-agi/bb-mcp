@@ -127,6 +127,33 @@
                           "workflow://a‮b" "workflow://\u0085x"]]
                (is (= {:uri uri :client false :host false} (policy-verdict uri)) uri)))})
 
+(defn- many-segments
+  "A well-formed URI of `n` one-letter segments: 2n+11 characters."
+  [n]
+  (apply str "workflow://a" (repeat (dec n) "/a")))
+
+(deftest long-uris-are-refused-not-fatal
+  (testing "the pattern alone matches a 100 KB, 50,000-segment URI without recursing"
+    (let [huge (many-segments 50000)]
+      (is (some? (re-matches (re-pattern resources/uri-pattern) huge)))
+      (is (some? (re-matches (re-pattern resources/uri-pattern) (str "workflow://" (apply str (repeat 100000 \a))))))))
+  (testing "both sides refuse anything over the length bound, and answer, never throw"
+    (doseq [uri [(many-segments 50000)
+                 (many-segments 25000)
+                 (str "workflow://" (apply str (repeat 100000 \a)))
+                 (str "verb://" (apply str (repeat resources/max-uri-length \a)))
+                 (apply str "workflow://a" (repeat 50000 "/.."))]]
+      (is (= {:client false :host false}
+             (select-keys (policy-verdict uri) [:client :host]))
+          (str (count uri) " chars"))))
+  (testing "the bound is inclusive: a valid URI of exactly the maximum length is allowed"
+    (let [at-max (str "workflow://" (apply str (repeat (- resources/max-uri-length 11) \a)))]
+      (is (= resources/max-uri-length (count at-max)))
+      (is (= {:client true :host true}
+             (select-keys (policy-verdict at-max) [:client :host])))
+      (is (= {:client false :host false}
+             (select-keys (policy-verdict (str at-max "a")) [:client :host]))))))
+
 ;; ── a read answers exactly what a list shows ────────────────────────────────
 
 (def ^:private host-ns 'hive-mcp.addons.core)
