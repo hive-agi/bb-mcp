@@ -23,45 +23,44 @@
   "The only URI schemes this server lists or reads."
   ["workflow://" "verb://"])
 
-(def ^:private forbidden
-  "Lower-cased fragments no served URI may contain: a parent segment, a
-   backslash, and the percent-encodings of dot, slash, backslash and NUL."
-  [".." "\\" "%2e" "%2f" "%5c" "%00"])
+(def ^:private segment
+  "Regex for one path segment: visible ASCII only, with no percent sign (so
+   no encoding, single or double), backslash or slash, and not made of dots
+   alone (so no current or parent segment). Dots inside a name are fine."
+  "(?!\\.+(?:/|\\z))[!-~&&[^%\\\\/]]+")
+
+(def uri-pattern
+  "The whole policy as one regex string, shared by `allowed-uri?` and
+   `uri-policy-form`: a scheme from `schemes`, then one or more `segment`s
+   joined by single slashes. An allowlist: whatever it does not describe
+   (an empty or absolute path, whitespace, control or non-ASCII characters)
+   is refused."
+  (str "(?:" (str/join "|" (map #(java.util.regex.Pattern/quote %) schemes)) ")"
+       segment "(?:/" segment ")*"))
 
 (defn allowed-uri?
-  "True when `uri` is a string in one of `schemes` with something after the
-   scheme, free of every `forbidden` fragment, whitespace and control
-   characters. Anything else is never sent to the host."
+  "True when `uri` is a string that `uri-pattern` matches in full. Anything
+   else is never sent to the host."
   [uri]
   (and (string? uri)
-       (boolean (some #(and (str/starts-with? uri %) (< (count %) (count uri)))
-                      schemes))
-       (let [lower (str/lower-case uri)]
-         (not-any? #(str/includes? lower %) forbidden))
-       (not-any? #(or (<= (int %) 32) (= 127 (int %))) uri)))
+       (some? (re-matches (re-pattern uri-pattern) uri))))
 
 (def uri-policy-form
   "`allowed-uri?` as a form the host evaluates, so the JVM applies the same
-   policy to what its addons declare. Built from the same `schemes` and
-   `forbidden` data; the policy test holds the two verdicts equal."
+   policy to what its addons declare. It carries the same `uri-pattern`
+   string; the policy test holds the two verdicts equal."
   `(fn [uri#]
      (and (string? uri#)
-          (boolean (some (fn [scheme#]
-                           (and (clojure.string/starts-with? uri# scheme#)
-                                (< (count scheme#) (count uri#))))
-                         ~schemes))
-          (not-any? (fn [bad#]
-                      (clojure.string/includes? (clojure.string/lower-case uri#) bad#))
-                    ~forbidden)
-          (not-any? (fn [c#] (or (<= (int c#) 32) (= 127 (int c#)))) uri#))))
+          (some? (re-matches (re-pattern ~uri-pattern) uri#)))))
 
 (defn- hive-eval
   "Evaluate a data-built form in the hive host. URI is printed, never code.
-   The port comes from `port-fn`, by default the configured nREPL port
-   (BB_MCP_NREPL_PORT, then .nrepl-port, then 7910)."
+   The port comes from `port-fn`, by default `nrepl/hive-port`: the port the
+   forwarded hive tools dial (BB_MCP_HIVE_NREPL_PORT, else 7910), never the
+   .nrepl-port of the project being worked on."
   ([form] (hive-eval form {}))
   ([form {:keys [eval-fn port-fn]
-          :or {eval-fn nrepl/eval-code port-fn nrepl/get-nrepl-port}}]
+          :or {eval-fn nrepl/eval-code port-fn nrepl/hive-port}}]
    (let [{:keys [result error?]} (eval-fn {:port (port-fn)
                                            :code (pr-str `(pr-str ~form))
                                            :timeout-ms 10000})]

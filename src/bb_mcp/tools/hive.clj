@@ -10,10 +10,11 @@
   "Initialize hive tools by loading them dynamically from hive-mcp.
 
    Options:
-     :port       - nREPL port (default: 7910)
+     :port       - nREPL port (default: the hive host port, see
+                   bb-mcp.tools.nrepl/hive-port)
      :timeout-ms - Connection timeout (default: 10000)
      :force      - Force reload even if already loaded"
-  [& {:keys [port timeout-ms force] :or {port 7910 timeout-ms 10000}}]
+  [& {:keys [port timeout-ms force] :or {timeout-ms 10000}}]
   (when (or force (not (dynamic/tools-loaded?)))
     (dynamic/load-dynamic-tools! :port port :timeout-ms timeout-ms)))
 

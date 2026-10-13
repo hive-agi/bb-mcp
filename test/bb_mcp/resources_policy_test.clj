@@ -8,7 +8,9 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [clojure.test.check.generators :as gen]
-            [hive-test.trifecta :refer [deftrifecta]]))
+            [hive-test.trifecta :refer [deftrifecta]]
+            [bb-mcp.tools.hive.dynamic :as dynamic]
+            [bb-mcp.tools.hive :as hive]))
 
 ;; ── the policy, client side and host side ───────────────────────────────────
 
@@ -26,6 +28,9 @@
 (def ^:private policy-cases
   {:workflow "workflow://demo"
    :verb "verb://demo/scan"
+   :verb-punctuation "verb://hive.core/ready?"
+   :dots-in-a-name "workflow://v1..2"
+   :dots-in-a-verb "verb://hive.core/a..b"
    :bare-workflow "workflow://"
    :bare-verb "verb://"
    :blank ""
@@ -39,15 +44,43 @@
    :nested-scheme "file://workflow://demo"
    :parent-segment "workflow://a/../demo"
    :only-parent "workflow://.."
+   :trailing-parent "workflow://a/.."
+   :current-segment "workflow://a/./b"
+   :dots-segment "workflow://a/.../b"
+   :absolute-path "workflow:///etc/passwd"
+   :empty-segment "workflow://a//b"
+   :trailing-slash "workflow://a/"
    :encoded-dots "verb://a/%2e%2e/b"
    :encoded-dots-upper "verb://a/%2E%2E/b"
+   :double-encoded "workflow://a%252e%252e%252fb"
    :encoded-slash "verb://a%2Fb"
+   :encoded-tab "workflow://a%09b"
    :backslash "workflow://a\\..\\b"
    :encoded-backslash "workflow://a%5cb"
    :newline "workflow://a\nb"
+   :trailing-newline "workflow://a\n"
    :space "workflow://a b"
+   :delete "workflow://a\u007Fb"
+   :no-break-space "workflow://a b"
+   :line-separator "workflow://a b"
+   :bidi-override "workflow://a‮b"
+   :next-line "workflow://\u0085x"
+   :non-ascii-letter "workflow://café"
    :encoded-nul "workflow://a%00"
    :not-a-string 42})
+
+(defn- policy-oracle
+  "The policy written out by hand, with no regex: a served scheme, then
+   slash-separated segments of visible ASCII free of percent and backslash,
+   none empty and none made of dots alone."
+  [uri]
+  (boolean
+   (when (string? uri)
+     (when-some [tail (some #(when (str/starts-with? uri %) (subs uri (count %)))
+                            ["workflow://" "verb://"])]
+       (and (every? #(and (< 32 (int %) 127) (not (#{\% \\} %))) tail)
+            (every? (fn [seg] (and (seq seg) (not-every? #{\.} seg)))
+                    (str/split tail #"/" -1)))))))
 
 (def ^:private gen-uri
   (gen/one-of
@@ -65,24 +98,33 @@
    :pred (fn [{:keys [uri client host]}]
            (and (boolean? client)
                 (= client host)
-                (or (not client)
-                    (and (some #(and (str/starts-with? uri %)
-                                     (< (count %) (count uri)))
-                               ["workflow://" "verb://"])
-                         (not-any? #(str/includes? (str/lower-case uri) %)
-                                   [".." "\\" "%2e" "%2f" "%5c" "%00" " " "\n" "\t"])))))
+                (= client (policy-oracle uri))))
    :mutations [["allow-everything" (fn [uri] {:uri uri :client true :host true})]
                ["refuse-everything" (fn [uri] {:uri uri :client false :host false})]
                ["scheme-only" (fn [uri]
                                 (let [ok (boolean (and (string? uri)
                                                        (or (str/starts-with? uri "workflow://")
                                                            (str/starts-with? uri "verb://"))))]
-                                  {:uri uri :client ok :host ok}))]]
+                                  {:uri uri :client ok :host ok}))]
+               ["fragment-blacklist"
+                (fn [uri]
+                  (let [ok (boolean
+                            (and (string? uri)
+                                 (some #(and (str/starts-with? uri %) (< (count %) (count uri)))
+                                       ["workflow://" "verb://"])
+                                 (not-any? #(str/includes? (str/lower-case uri) %)
+                                           [".." "\\" "%2e" "%2f" "%5c" "%00"])
+                                 (not-any? #(or (<= (int %) 32) (= 127 (int %))) uri)))]
+                    {:uri uri :client ok :host ok}))]]
    :assert (fn []
-             (doseq [uri ["workflow://demo" "verb://demo/scan"]]
+             (doseq [uri ["workflow://demo" "verb://demo/scan" "workflow://v1..2"
+                          "verb://hive.core/a..b"]]
                (is (= {:uri uri :client true :host true} (policy-verdict uri)) uri))
              (doseq [uri ["file:///etc/passwd" "unknown://demo" "workflow://a/../demo"
-                          "verb://a/%2e%2e/b" "workflow://a\\..\\b" "workflow://"]]
+                          "verb://a/%2e%2e/b" "workflow://a\\..\\b" "workflow://"
+                          "workflow:///etc/passwd" "workflow://a%252e%252e%252fb"
+                          "workflow://a%09b" "workflow://a b" "workflow://a b"
+                          "workflow://a‮b" "workflow://\u0085x"]]
                (is (= {:uri uri :client false :host false} (policy-verdict uri)) uri)))})
 
 ;; ── a read answers exactly what a list shows ────────────────────────────────
@@ -226,8 +268,8 @@
       (is (= [1 2] (#'resources/hive-eval '(vector 1 2)
                                           {:eval-fn host :port-fn (constantly 7999)})))
       (is (= 7999 (:port (last @seen)))))
-    (testing "the default source is the shared nREPL port resolution"
-      (with-redefs [nrepl/get-nrepl-port (constantly 4242)
+    (testing "the default source is the hive host port"
+      (with-redefs [nrepl/hive-port (constantly 4242)
                     nrepl/eval-code host]
         (is (= [] (resources/list-resources resources/*source*)))
         (is (nil? (resources/read-resource resources/*source* "workflow://demo"))))
@@ -237,3 +279,32 @@
                             (#'resources/hive-eval '(vector)
                                                    {:eval-fn (fn [_] {:result "refused" :error? true})
                                                     :port-fn (constantly 1)}))))))
+
+(deftest the-hive-port-ignores-the-project-repl
+  (testing "the override variable, else 7910"
+    (is (= 7910 (nrepl/hive-port {})))
+    (is (= 7931 (nrepl/hive-port {nrepl/hive-port-var " 7931 "})))
+    (is (= 7910 (nrepl/hive-port {nrepl/hive-port-var " "})))
+    (is (= 7910 (nrepl/hive-port {nrepl/hive-port-var "not-a-port"}))))
+  (testing "neither BB_MCP_NREPL_PORT nor a project's .nrepl-port moves it"
+    (is (= 7910 (nrepl/hive-port {"BB_MCP_NREPL_PORT" "45555"
+                                  "BB_MCP_PROJECT_DIR" "/somewhere/with/a/repl"})))))
+
+(deftest resources-and-forwarded-tools-dial-one-host
+  (let [dialled (atom [])
+        stub (fn [{:keys [port]}]
+               (swap! dialled conj port)
+               {:result (pr-str (pr-str [])) :error? false})]
+    (try
+      (with-redefs [nrepl/get-nrepl-port (constantly 45555)
+                    nrepl/hive-port (constantly 7931)
+                    nrepl/eval-code stub]
+        (resources/list-resources resources/*source*)
+        (resources/read-resource resources/*source* "workflow://demo")
+        ((#'dynamic/make-forwarding-handler "some_tool" {}) {})
+        (dynamic/load-dynamic-tools!)
+        (hive/init! :force true))
+      (finally (dynamic/clear-cache!)))
+    (is (= [7931 7931 7931 7931 7931] @dialled)
+        "a project REPL on 45555 is never sent a hive form, and a list, a read,
+         a forwarded tool and both tool loads reach the same process")))
