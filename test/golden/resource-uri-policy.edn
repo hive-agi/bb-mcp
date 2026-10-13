@@ -1,0 +1,28 @@
+{:backslash {:uri "workflow://a\\..\\b", :client false, :host false},
+ :bare-verb {:uri "verb://", :client false, :host false},
+ :bare-workflow {:uri "workflow://", :client false, :host false},
+ :blank {:uri "", :client false, :host false},
+ :encoded-backslash
+ {:uri "workflow://a%5cb", :client false, :host false},
+ :encoded-dots {:uri "verb://a/%2e%2e/b", :client false, :host false},
+ :encoded-dots-upper
+ {:uri "verb://a/%2E%2E/b", :client false, :host false},
+ :encoded-nul {:uri "workflow://a%00", :client false, :host false},
+ :encoded-slash {:uri "verb://a%2Fb", :client false, :host false},
+ :file {:uri "file:///etc/passwd", :client false, :host false},
+ :http {:uri "http://example.com/x", :client false, :host false},
+ :leading-space {:uri " workflow://demo", :client false, :host false},
+ :nested-scheme
+ {:uri "file://workflow://demo", :client false, :host false},
+ :newline {:uri "workflow://a\nb", :client false, :host false},
+ :not-a-string {:uri 42, :client false, :host false},
+ :one-slash {:uri "workflow:/demo", :client false, :host false},
+ :only-parent {:uri "workflow://..", :client false, :host false},
+ :parent-segment
+ {:uri "workflow://a/../demo", :client false, :host false},
+ :prefixed {:uri "xworkflow://demo", :client false, :host false},
+ :space {:uri "workflow://a b", :client false, :host false},
+ :unknown-scheme {:uri "unknown://demo", :client false, :host false},
+ :upper-scheme {:uri "WORKFLOW://demo", :client false, :host false},
+ :verb {:uri "verb://demo/scan", :client true, :host true},
+ :workflow {:uri "workflow://demo", :client true, :host true}}

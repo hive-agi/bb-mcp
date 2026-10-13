@@ -1,0 +1,54 @@
+{:blank
+ {:uri "",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32602,
+  :content-uri nil,
+  :host-reads []},
+ :declared-file
+ {:uri "file:///etc/passwd",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []},
+ :declared-nameless
+ {:uri "workflow://nameless",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []},
+ :declared-traversal
+ {:uri "workflow://a/../demo",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []},
+ :dormant-addon
+ {:uri "workflow://dormant",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []},
+ :listed-verb
+ {:uri "verb://demo/scan",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer "body of verb://demo/scan",
+  :content-uri "verb://demo/scan",
+  :host-reads ["verb://demo/scan"]},
+ :listed-workflow
+ {:uri "workflow://demo",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer "body of workflow://demo",
+  :content-uri "workflow://demo",
+  :host-reads ["workflow://demo"]},
+ :silent-addon
+ {:uri "workflow://silent",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []},
+ :undeclared
+ {:uri "workflow://missing",
+  :listed ["workflow://demo" "verb://demo/scan"],
+  :answer -32002,
+  :content-uri nil,
+  :host-reads []}}
