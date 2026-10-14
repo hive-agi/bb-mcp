@@ -27,6 +27,21 @@
               :required ["foo"]}
              (get-in result [:spec :schema]))))))
 
+(deftest transform-tool-preserves-code-edit-params-test
+  (let [spec {:name "code" :description "Code intelligence"
+              :schema {:type "object" :required ["command"]
+                       :properties {"command" {:type "string"}
+                                    "scope" {:type "string"}
+                                    "qn" {:type "string"}
+                                    "new-body" {:type "string"}
+                                    "unrelated" {:type "string"}}}
+              :core-schema {:type "object" :required ["command"]
+                            :properties {"command" {:type "string"}}}}
+        result (#'dynamic/transform-tool spec)
+        properties (get-in result [:spec :schema :properties])]
+    (is (every? #(contains? properties %) ["command" "scope" "qn" "new-body"]))
+    (is (not (contains? properties "unrelated")))))
+
 (deftest transform-tool-missing-schema-test
   (testing "Transform handles missing schema"
     (let [hive-spec {:name "minimal_tool"
