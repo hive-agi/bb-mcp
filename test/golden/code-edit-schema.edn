@@ -1,0 +1,13 @@
+{:write-form
+ {:name "code",
+  :description
+  "Code intelligence. Compact schema: only the shared parameters are listed here; each command also accepts its own (1 more). command='help' lists the commands; for a carto command, command='carto describe' of='<command>' returns its :params.",
+  :schema
+  {:type "object",
+   :required ["command"],
+   :properties
+   {"command" {:type "string"},
+    "new-body" {:type "string"},
+    "scope" {:type "string"},
+    "qn" {:type "string"}},
+   :additionalProperties true}}}
