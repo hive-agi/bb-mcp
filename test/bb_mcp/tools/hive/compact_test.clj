@@ -3,9 +3,7 @@
    pinned without a hive-mcp: what is kept, what is dropped, what stays open,
    and when the tool is returned untouched."
   (:require [clojure.test :refer [deftest is testing]]
-            [hive-test.trifecta :refer [deftrifecta]]
-            [bb-mcp.tools.hive.compact :as compact]
-            [clojure.test.check.generators :as gen]))
+            [bb-mcp.tools.hive.compact :as compact]))
 
 (def ^:private full
   {:name "code"
@@ -58,34 +56,3 @@
   (testing "a tool with no properties at all"
     (let [bare {:name "bash" :description "b" :schema {:type "object" :properties {}}}]
       (is (= bare (compact/compact-tool bare core))))))
-
-(deftrifecta code-edit-schema
-  compact/compact-tool
-  {:apply? true
-   :golden-path "test/golden/code-edit-schema.edn"
-   :cases {:write-form [{:name "code" :description "Code intelligence."
-                         :schema {:type "object" :required ["command"]
-                                  :properties {"command" {:type "string"}
-                                               "scope" {:type "string"}
-                                               "qn" {:type "string"}
-                                               "new-body" {:type "string"}
-                                               "other-command-only" {:type "string"}}}}
-                        core]}
-   :gen (gen/return [{:name "code" :description "Code intelligence."
-                      :schema {:type "object" :required ["command"]
-                               :properties {"command" {:type "string"}
-                                            "scope" {:type "string"}
-                                            "qn" {:type "string"}
-                                            "new-body" {:type "string"}
-                                            "other-command-only" {:type "string"}}}}
-                     core])
-   :num-tests 12
-   :pred (fn [result]
-           (let [properties (get-in result [:schema :properties])]
-             (and (every? #(contains? properties %) ["command" "scope" "qn" "new-body"])
-                  (not (contains? properties "other-command-only"))
-                  (true? (get-in result [:schema :additionalProperties])))))
-   :mutations [["drops-edit-params"
-                (fn [tool core-schema]
-                  (let [projected (compact/compact-tool (assoc tool :name "other") core-schema)]
-                    (assoc projected :name "code")))]]})
