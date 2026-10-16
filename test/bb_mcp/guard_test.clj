@@ -13,6 +13,12 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]))
 
+(deftest an-ask-nothing-granted-is-a-refusal
+  (is (guard/denied? {:guard/verdict :ask :guard/reason "r"}))
+  (is (guard/denied? {:guard/verdict :deny :guard/reason "r"}))
+  (is (not (guard/denied? {:guard/verdict :allow :guard/granted :notify})))
+  (is (not (guard/denied? {:guard/verdict :warn :guard/reason "r"}))))
+
 (defn- transport
   "An eval-fn answering `edn` the way nREPL does: pr-str of our pr-str.
    Records the request it was given in `seen`."
