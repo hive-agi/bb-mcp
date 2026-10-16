@@ -16,7 +16,8 @@
             [bb-mcp.sense-test]
             [bb-mcp.tools.hive.compact-test]
             [bb-mcp.async-test]
-            [bb-mcp.resources-test]))
+            [bb-mcp.resources-test]
+            [bb-mcp.concurrent-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -30,6 +31,7 @@
    'bb-mcp.host.conformance-test
    'bb-mcp.host.json-props-test
    'bb-mcp.core-test
+   'bb-mcp.concurrent-test
    'bb-mcp.guard-test
    'bb-mcp.piggyback-test
    'bb-mcp.sense-test
