@@ -1,9 +1,12 @@
 (ns bb-mcp.resources
-  "Resource source boundary. Addons declare :resources as a sequence of
-   {:uri :name :mimeType :handler} maps on their IAddon instance. The handler
-   accepts the requested URI and returns text or an MCP content map.
-   Only active addons advertising :resources participate. The JVM owns the
-   handlers; this client carries only data across the nREPL boundary."
+  "Resource source boundary. Addons implement the optional
+   hive-addon.resources/IAddonResources protocol, which lists descriptors with
+   {:uri :name :mimeType :handler} maps. The handler accepts the requested URI
+   and returns text or an MCP content map. Only active addons advertising
+   :resources participate. The JVM owns the handlers; this client carries
+   only data across the nREPL boundary. The hive-addon.resources/resources
+   accessor validates and lists optional contributions; read-resource gates
+   reads to advertised URIs. Legacy hosts without the protocol list nothing."
   (:require [bb-mcp.tools.nrepl :as nrepl]
             [clojure.edn :as edn]))
 
@@ -21,37 +24,51 @@
       (throw (ex-info "Resource source unavailable" {:cause result}))
       (edn/read-string (edn/read-string result)))))
 
-(defrecord HiveResourceSource []
+(defrecord HiveResourceSource [evaluate]
   ResourceSource
   (list-resources [_]
-    (hive-eval
-     '(->> ((requiring-resolve 'hive-mcp.addons.core/list-addons))
-           (filter (fn [entry] (and (= :active (:state entry))
-                                    (contains? (:capabilities entry) :resources))))
-           (mapcat (fn [entry]
-                     (let [addon ((requiring-resolve 'hive-mcp.addons.core/get-addon)
-                                  (:name entry))]
-                       (map (fn [r] (select-keys r [:uri :name :description :mimeType]))
-                            (:resources addon)))))
-           (filter (fn [r] (and (string? (:uri r)) (string? (:name r)))))
-           vec)))
+    (evaluate
+     '(let [accessor (try (requiring-resolve 'hive-addon.resources/resources)
+                          (catch java.io.FileNotFoundException _ nil))
+            allowed? (fn [uri] (and (string? uri)
+                                    (or (clojure.string/starts-with? uri "workflow://")
+                                        (clojure.string/starts-with? uri "verb://"))
+                                    (not (clojure.string/includes? uri ".."))))]
+        (if-not accessor
+          []
+          (->> ((requiring-resolve 'hive-mcp.addons.core/list-addons))
+               (filter (fn [entry] (and (= :active (:state entry))
+                                        (contains? (:capabilities entry) :resources))))
+               (mapcat (fn [entry]
+                         (let [addon ((requiring-resolve 'hive-mcp.addons.core/get-addon)
+                                      (:name entry))]
+                           (map (fn [r] (select-keys r [:uri :name :description :mimeType]))
+                                (accessor addon)))))
+               (filter (fn [r] (and (allowed? (:uri r)) (string? (:name r)))))
+               vec)))))
   (read-resource [_ uri]
-    (hive-eval
-     `(let [uri# ~uri]
-        (some (fn [entry#]
-                (when (and (= :active (:state entry#))
-                           (contains? (:capabilities entry#) :resources))
-                  (let [addon# ((requiring-resolve 'hive-mcp.addons.core/get-addon)
-                                (:name entry#))]
-                    (when-let [r# (some (fn [r#] (when (= uri# (:uri r#)) r#))
-                                        (:resources addon#))]
-                      (when-let [handler# (:handler r#)]
-                        (let [value# (handler# uri#)]
+    (evaluate
+     `(let [uri# ~uri
+            accessor# (try (requiring-resolve 'hive-addon.resources/resources)
+                           (catch java.io.FileNotFoundException _# nil))
+            reader# (try (requiring-resolve 'hive-addon.resources/read-resource)
+                         (catch java.io.FileNotFoundException _# nil))]
+        (when (and accessor# reader# (string? uri#)
+                   (or (clojure.string/starts-with? uri# "workflow://")
+                       (clojure.string/starts-with? uri# "verb://"))
+                   (not (clojure.string/includes? uri# "..")))
+          (some (fn [entry#]
+                  (when (and (= :active (:state entry#))
+                             (contains? (:capabilities entry#) :resources))
+                    (let [addon# ((requiring-resolve 'hive-mcp.addons.core/get-addon)
+                                  (:name entry#))]
+                      (when (some (fn [r#] (= uri# (:uri r#))) (accessor# addon#))
+                        (when-some [value# (reader# addon# uri#)]
                           (if (map? value#)
                             (merge {:uri uri#} value#)
-                            {:uri uri# :text (str value#)})))))))
-              ((requiring-resolve 'hive-mcp.addons.core/list-addons)))))))
+                            {:uri uri# :text (str value#)}))))))
+                ((requiring-resolve 'hive-mcp.addons.core/list-addons))))))))
 
 (def ^:dynamic *source*
   "Port for resource lookup; bind to an in-memory stub in tests."
-  (->HiveResourceSource))
+  (->HiveResourceSource hive-eval))

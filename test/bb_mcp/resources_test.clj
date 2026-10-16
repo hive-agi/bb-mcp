@@ -56,3 +56,71 @@
                                   (read-resource [_ _] (throw (ex-info "offline" {}))))]
       (is (= -32603 (get-in (core/handle-method list-request) [:error :code])))
       (is (= -32603 (get-in (core/handle-method read-request) [:error :code]))))))
+
+(defn adapter-query [uri]
+  (let [forms (atom [])
+        source (resources/->HiveResourceSource
+                (fn [form]
+                  (swap! forms conj (pr-str form))
+                  (if (= 1 (count @forms))
+                    [{:uri "workflow://demo" :name "Demo"}]
+                    {:uri uri :text "demo AST"})))]
+    {:list (resources/list-resources source)
+     :read (resources/read-resource source uri)
+     :forms @forms}))
+
+(deftrifecta addon-protocol-adapter
+  #'adapter-query
+  {:golden-path "test/golden/resource-adapter.edn"
+   :cases {:workflow "workflow://demo"}
+   :xf (fn [r] (dissoc r :forms))
+   :gen (gen/return "workflow://demo")
+   :pred (fn [r] (and (= "workflow://demo" (get-in r [:list 0 :uri]))
+                      (= 2 (count (:forms r)))
+                      (every? #(clojure.string/includes? % "hive-addon.resources/resources")
+                              (:forms r))))
+   :mutations [["no-adapter" (fn [_] {:list [] :read nil :forms []})]]
+   :assert (fn []
+             (let [{:keys [list read forms]} (adapter-query "workflow://demo")]
+               (is (= "Demo" (:name (first list))))
+               (is (= "demo AST" (:text read)))
+               (is (every? #(clojure.string/includes? % "hive-addon.resources/resources") forms))
+               (is (clojure.string/includes? (second forms) "hive-addon.resources/read-resource"))
+               (is (every? #(clojure.string/includes? % "java.io.FileNotFoundException") forms))))})
+
+(deftest adapter-executes-against-stub-host
+  (let [host-ns 'hive-mcp.addons.core
+        contract-ns 'hive-addon.resources
+        reads (atom [])
+        addon {:id :stub}
+        listed [{:uri "workflow://demo" :name "Demo" :mimeType "text/plain"}]
+        source (resources/->HiveResourceSource eval)
+        request (fn [uri] (binding [resources/*source* source]
+                            (core/handle-method {:method "resources/read" :id 7
+                                                 :params {:uri uri}})))
+        listing (fn [] (binding [resources/*source* source]
+                         (core/handle-method {:method "resources/list" :id 6})))]
+    (try
+      ;; A legacy host has no optional namespace; the generated form must
+      ;; execute, not merely be printable, without resolving the registry.
+      (is (= [] (get-in (listing) [:result :resources])))
+      (is (= -32002 (get-in (request "workflow://demo") [:error :code])))
+      (create-ns host-ns)
+      (intern host-ns 'list-addons (fn [] [{:name "stub" :state :active
+                                            :capabilities #{:resources}}]))
+      (intern host-ns 'get-addon (fn [_] addon))
+      (create-ns contract-ns)
+      (intern contract-ns 'resources (fn [_] listed))
+      (intern contract-ns 'read-resource
+              (fn [_ uri] (swap! reads conj uri) "demo AST"))
+      (is (= listed (get-in (listing) [:result :resources])))
+      (is (= "demo AST" (get-in (request "workflow://demo")
+                                  [:result :contents 0 :text])))
+      (is (= ["workflow://demo"] @reads))
+      (doseq [uri ["workflow://missing" "file:///etc/passwd"
+                   "workflow://a/../demo" "unknown://demo"]]
+        (is (= -32002 (get-in (request uri) [:error :code])) uri))
+      (is (= ["workflow://demo"] @reads))
+      (finally
+        (remove-ns contract-ns)
+        (remove-ns host-ns)))))
