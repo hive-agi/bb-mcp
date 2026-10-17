@@ -7,7 +7,9 @@
   (:require [bb-mcp.tools.bash.remote :as remote]
             [bb-mcp.tools.bash.spec :as spec]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [bb-mcp.tools.nrepl :as nrepl]
+            [bb-mcp.host.port :as hp]))
 
 (defn- transport
   "An eval-fn answering `edn` the way nREPL does: pr-str of our pr-str.
@@ -78,6 +80,163 @@
                              :port-fn (constantly 7910)})]
       (is (= -1 (:exit-code r)))
       (is (str/includes? (:stderr r) "socket closed")))))
+
+(defn- refusing-open
+  "An IByteChannel opener that refuses every port in `down`, the way cljw.net
+  does when nothing listens. Records each port it was asked for in `asked`."
+  [asked down]
+  (fn [{:keys [port]}]
+    (swap! asked conj port)
+    (when (contains? down port)
+      (throw (ex-info (str "cljw.net: could not connect to 'localhost:" port "'")
+                      {:port port})))
+    (throw (ex-info "unexpected open in this stub" {:port port}))))
+
+(deftest refused-connection-is-tagged-by-the-client
+  (testing "nrepl/eval-code marks a refused open as :connect-failed?"
+    (let [asked (atom [])
+          r (nrepl/eval-code {:port 7932 :code "(+ 1 2)"
+                              :open-fn (refusing-open asked #{7932})})]
+      (is (true? (:error? r)))
+      (is (true? (:connect-failed? r)))
+      (is (str/includes? (:result r) "localhost:7932"))
+      (is (= [7932] @asked)))))
+
+(deftest refused-everywhere-names-owner-and-recovery
+  (testing "both ports refuse: the error names the owner, how to start it, and why there is no local exec"
+    (let [asked (atom [])
+          eval-fn (fn [req] (nrepl/eval-code (assoc req :open-fn (refusing-open asked #{7932 7910}))))
+          r (remote/execute {:command "git status"}
+                            {:eval-fn eval-fn :port-fn (constantly 7932)})]
+      (is (= [7932 7910] @asked) "the resolved port first, then hive-mcp's own")
+      (is (= -1 (:exit-code r)))
+      (is (str/includes? (:stderr r) "localhost:7932, localhost:7910"))
+      (is (str/includes? (:stderr r) "hive-mcp JVM nREPL"))
+      (is (str/includes? (:stderr r) "`hive-mcp` launcher"))
+      (is (str/includes? (:stderr r) ".nrepl-port"))
+      (is (str/includes? (:stderr r) "No local fallback"))
+      (is (str/includes? (:stderr r) "BB_MCP_RUNTIME=bb")))))
+
+(deftest resolve-nrepl-port-names-its-source
+  (let [no-env (constantly nil)
+        no-file (constantly nil)]
+    (testing "an explicit port wins over everything"
+      (is (= {:port 1234 :source :explicit-param}
+             (nrepl/resolve-nrepl-port 1234 {:getenv (constantly "7000")
+                                             :read-port-file (constantly 7932)}))))
+    (testing "BB_MCP_NREPL_PORT beats the .nrepl-port file"
+      (is (= {:port 7000 :source :env :env-var "BB_MCP_NREPL_PORT"}
+             (nrepl/resolve-nrepl-port nil {:getenv {"BB_MCP_NREPL_PORT" " 7000\n"}
+                                            :read-port-file (constantly 7932)}))))
+    (testing "the .nrepl-port file carries its path"
+      (let [asked (atom nil)]
+        (is (= {:port 7932 :source :nrepl-port-file :path "/proj/.nrepl-port"}
+               (nrepl/resolve-nrepl-port nil {:getenv no-env :project-dir "/proj"
+                                              :read-port-file (fn [p] (reset! asked p) 7932)})))
+        (is (= "/proj/.nrepl-port" @asked))))
+    (testing "nothing configured: hive-mcp's default"
+      (is (= {:port 7910 :source :default}
+             (nrepl/resolve-nrepl-port nil {:getenv no-env :project-dir "/proj"
+                                            :read-port-file no-file}))))
+    (testing "the default source reads without a redundant fallback clause"
+      (let [msg (remote/unreachable-message [7910] "refused" {:port 7910 :source :default})]
+        (is (str/includes? msg "port 7910 came from the built-in default"))
+        (is (not (str/includes? msg "then hive-mcp's default")))))))
+
+(deftest refused-error-says-where-the-port-came-from
+  (let [refuse (fn [{:keys [port]}]
+                 {:error? true :connect-failed? true
+                  :result (str "cljw.net: could not connect to 'localhost:" port "'")})]
+    (testing "a stale .nrepl-port is named by path, with the hive-build hint for 7932"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse
+                               :resolve-fn (constantly {:port 7932 :source :nrepl-port-file
+                                                        :path "/proj/.nrepl-port"})})]
+        (is (str/includes? (:stderr r) "port 7932 came from /proj/.nrepl-port"))
+        (is (str/includes? (:stderr r) "hive-build's deps.edn"))))
+    (testing "an env port is named by its variable, and no hive-build hint"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse
+                               :resolve-fn (constantly {:port 7000 :source :env
+                                                        :env-var "BB_MCP_NREPL_PORT"})})]
+        (is (str/includes? (:stderr r) "port 7000 came from the BB_MCP_NREPL_PORT env var"))
+        (is (not (str/includes? (:stderr r) "hive-build")))))
+    (testing "a bare-int :port-fn still works and keeps the generic wording"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse :port-fn (constantly 7000)})]
+        (is (str/includes? (:stderr r) "localhost:7000, localhost:7910"))
+        (is (str/includes? (:stderr r) "resolved from BB_MCP_NREPL_PORT"))))))
+
+(deftest refused-port-falls-back-to-hive-mcp-port
+  (testing "a stale resolved port refuses; hive-mcp's port answers and the command runs"
+    (let [seen (atom [])
+          eval-fn (fn [{:keys [port] :as req}]
+                    (swap! seen conj port)
+                    (if (= 7932 port)
+                      {:error? true :connect-failed? true
+                       :result "cljw.net: could not connect to 'localhost:7932'"}
+                      ((transport (atom nil) {:ok {:exit 0 :stdout "clean\n" :stderr ""}}) req)))
+          r (remote/execute {:command "git status"}
+                            {:eval-fn eval-fn :port-fn (constantly 7932)})]
+      (is (= [7932 7910] @seen))
+      (is (= 0 (:exit-code r)))
+      (is (= "clean\n" (:stdout r))))))
+
+(deftest failure-after-connect-is-never-retried
+  (testing "an error once connected is not a refusal: the command is sent once"
+    (let [seen (atom [])
+          r (remote/execute {:command "touch x"}
+                            {:eval-fn (fn [{:keys [port]}]
+                                        (swap! seen conj port)
+                                        {:error? true :result "Read timed out"})
+                             :port-fn (constantly 7932)})]
+      (is (= [7932] @seen))
+      (is (str/includes? (:stderr r) "Read timed out")))))
+
+(defn- broken-channel-open
+  "An opener whose channel OPENS, then throws on `fail-at` (:write or :read).
+  Records each opened port in `opened` and each write in `writes`."
+  [opened writes fail-at]
+  (fn [{:keys [port]}]
+    (swap! opened conj port)
+    (reify hp/IByteChannel
+      (write-bytes! [_ _]
+        (swap! writes inc)
+        (when (= :write fail-at) (throw (ex-info "Broken pipe" {:port port})))
+        nil)
+      (read-bytes! [_ _]
+        (when (= :read fail-at) (throw (ex-info "Read timed out" {:port port})))
+        -1)
+      (close! [_] nil))))
+
+(deftest failure-after-open-is-not-a-refusal
+  (doseq [fail-at [:write :read]]
+    (testing (str "a channel that opened and then failed on " (name fail-at)
+                  " is an error, never :connect-failed?")
+      (let [opened (atom []) writes (atom 0)
+            r (nrepl/eval-code {:port 7932 :code "(+ 1 2)"
+                                :open-fn (broken-channel-open opened writes fail-at)})]
+        (is (true? (:error? r)))
+        (is (not (contains? r :connect-failed?)))
+        (is (= [7932] @opened))
+        (is (= 1 @writes))))))
+
+(deftest eval-after-open-failure-is-sent-once
+  (doseq [fail-at [:write :read]]
+    (testing (str "remote bash over a client whose channel fails on " (name fail-at)
+                  " sends the eval exactly once, to the resolved port only")
+      (let [opened (atom []) writes (atom 0) evals (atom [])
+            client (fn [req]
+                     (nrepl/eval-code
+                      (assoc req :open-fn (broken-channel-open opened writes fail-at))))
+            recording (fn [req] (swap! evals conj (:port req)) (client req))
+            r (remote/execute {:command "touch x"}
+                              {:eval-fn recording :port-fn (constantly 7932)})]
+        (is (= [7932] @evals))
+        (is (= [7932] @opened))
+        (is (= 1 @writes))
+        (is (= -1 (:exit-code r)))
+        (is (not (str/includes? (:stderr r) "No local fallback")))))))
 
 (deftest request-carries-the-guarded-inputs
   (testing "working directory and timeout reach exec!, and the deadline has headroom"
