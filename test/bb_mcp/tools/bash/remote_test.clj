@@ -8,7 +8,8 @@
             [bb-mcp.tools.bash.spec :as spec]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [bb-mcp.tools.nrepl :as nrepl]))
+            [bb-mcp.tools.nrepl :as nrepl]
+            [bb-mcp.host.port :as hp]))
 
 (defn- transport
   "An eval-fn answering `edn` the way nREPL does: pr-str of our pr-str.
@@ -141,6 +142,51 @@
                              :port-fn (constantly 7932)})]
       (is (= [7932] @seen))
       (is (str/includes? (:stderr r) "Read timed out")))))
+
+(defn- broken-channel-open
+  "An opener whose channel OPENS, then throws on `fail-at` (:write or :read).
+  Records each opened port in `opened` and each write in `writes`."
+  [opened writes fail-at]
+  (fn [{:keys [port]}]
+    (swap! opened conj port)
+    (reify hp/IByteChannel
+      (write-bytes! [_ _]
+        (swap! writes inc)
+        (when (= :write fail-at) (throw (ex-info "Broken pipe" {:port port})))
+        nil)
+      (read-bytes! [_ _]
+        (when (= :read fail-at) (throw (ex-info "Read timed out" {:port port})))
+        -1)
+      (close! [_] nil))))
+
+(deftest failure-after-open-is-not-a-refusal
+  (doseq [fail-at [:write :read]]
+    (testing (str "a channel that opened and then failed on " (name fail-at)
+                  " is an error, never :connect-failed?")
+      (let [opened (atom []) writes (atom 0)
+            r (nrepl/eval-code {:port 7932 :code "(+ 1 2)"
+                                :open-fn (broken-channel-open opened writes fail-at)})]
+        (is (true? (:error? r)))
+        (is (not (contains? r :connect-failed?)))
+        (is (= [7932] @opened))
+        (is (= 1 @writes))))))
+
+(deftest eval-after-open-failure-is-sent-once
+  (doseq [fail-at [:write :read]]
+    (testing (str "remote bash over a client whose channel fails on " (name fail-at)
+                  " sends the eval exactly once, to the resolved port only")
+      (let [opened (atom []) writes (atom 0) evals (atom [])
+            client (fn [req]
+                     (nrepl/eval-code
+                      (assoc req :open-fn (broken-channel-open opened writes fail-at))))
+            recording (fn [req] (swap! evals conj (:port req)) (client req))
+            r (remote/execute {:command "touch x"}
+                              {:eval-fn recording :port-fn (constantly 7932)})]
+        (is (= [7932] @evals))
+        (is (= [7932] @opened))
+        (is (= 1 @writes))
+        (is (= -1 (:exit-code r)))
+        (is (not (str/includes? (:stderr r) "No local fallback")))))))
 
 (deftest request-carries-the-guarded-inputs
   (testing "working directory and timeout reach exec!, and the deadline has headroom"
