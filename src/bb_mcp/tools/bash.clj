@@ -3,7 +3,8 @@
   (:require [babashka.process :as p]
             [bb-mcp.tools.bash.spec :as spec]
             [clojure.java.io :as io]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [bb-mcp.tools.bash.scope :as scope])
   (:import (java.util.concurrent TimeUnit)))
 
 (def tool-spec
@@ -65,16 +66,23 @@
       bb-mcp's per-session cwd so `pwd` matches user's actual session cwd,
       not the bb-mcp process's cwd which is always bb-mcp/ after
       start-bb-mcp.sh cd's into $SCRIPT_DIR)
-   3. Process cwd (bb-mcp/) — last-resort fallback"
-  [{:keys [command working_directory timeout_ms _caller_cwd]}]
+   3. Process cwd (bb-mcp/) — last-resort fallback
+
+   OOM scope: the command runs in a sibling ManagedOOMPreference=none user
+   scope when systemd-run supports it here (see `bb-mcp.tools.bash.scope`),
+   so a runaway build is not shielded by the host server's avoid scope.
+   `:scope-probe` (0-arg fn) overrides the cached default probe."
+  [{:keys [command working_directory timeout_ms _caller_cwd scope-probe]}]
   (let [timeout (or timeout_ms 180000)
         effective-dir (or working_directory _caller_cwd)
         opts (cond-> {:out :stream
                       :err :stream
                       :shutdown p/destroy-tree}
-               effective-dir (assoc :dir effective-dir))]
+               effective-dir (assoc :dir effective-dir))
+        argv (scope/argv-for (or scope-probe scope/default-probe)
+                             ["bash" "-c" command])]
     (try
-      (let [proc (p/process opts "bash" "-c" command)
+      (let [proc (apply p/process opts argv)
             ^Process handle (:proc proc)
             out (drain (:out proc))
             err (drain (:err proc))
