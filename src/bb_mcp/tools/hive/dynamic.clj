@@ -64,7 +64,7 @@
    We extract just the spec fields (not handler). :core-schema is the tool's
    own pre-extension inputSchema (registry/get-consolidated-tools), which the
    compact schema mode advertises in place of the merged one."
-  [{:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
+  [{:keys [port timeout-ms] :or {port (nrepl/hive-port) timeout-ms 10000}}]
   (let [code (pr-str
               '(pr-str
                 (let [core (into {}
@@ -136,7 +136,7 @@
                             key-rename))
           ;; nREPL port is always hive-mcp's port, never from tool args.
           ;; Tool args :port belongs to the handler (e.g., CIDER connect target port).
-          nrepl-port 7910
+          nrepl-port (nrepl/hive-port)
           ;; Respect existing agent_id, fallback to env var or 'coordinator' for piggyback cursor
           agent-id (or (:agent_id args) (get-agent-id))
           ;; Inject the session's pwd as _caller_cwd so hive-mcp resolves the
@@ -220,17 +220,19 @@
 
 (defn load-dynamic-tools!
   "Fetch tools from hive-mcp and cache them.
-   Returns true on success, false on failure."
-  [& {:keys [port timeout-ms] :or {port 7910 timeout-ms 10000}}]
-  (log-stderr "[dynamic] Loading tools from hive-mcp on port" port)
-  (if-let [raw-tools (fetch-hive-tools-raw {:port port :timeout-ms timeout-ms})]
-    (let [tools (mapv transform-tool raw-tools)]
-      (reset! tool-cache tools)
-      (log-stderr "[dynamic] Loaded" (count tools) "tools from hive-mcp")
-      true)
-    (do
-      (log-stderr "[dynamic] Failed to load tools, using static fallback")
-      false)))
+   Returns true on success, false on failure. `:port` defaults to
+   `nrepl/hive-port`, the port every forwarded call dials."
+  [& {:keys [port timeout-ms] :or {timeout-ms 10000}}]
+  (let [port (or port (nrepl/hive-port))]
+    (log-stderr "[dynamic] Loading tools from hive-mcp on port" port)
+    (if-let [raw-tools (fetch-hive-tools-raw {:port port :timeout-ms timeout-ms})]
+      (let [tools (mapv transform-tool raw-tools)]
+        (reset! tool-cache tools)
+        (log-stderr "[dynamic] Loaded" (count tools) "tools from hive-mcp")
+        true)
+      (do
+        (log-stderr "[dynamic] Failed to load tools, using static fallback")
+        false))))
 
 (defn get-tools
   "Get cached dynamic tools. Returns nil if not loaded."

@@ -149,6 +149,46 @@
               (proto/json-rpc-response 2 {:prompts []})]
              @outbox)))))
 
+(defn- run-messages
+  "Drive run-server over `msgs` in memory; the responses it wrote."
+  [msgs]
+  (let [inbox  (atom msgs)
+        outbox (atom [])
+        t      (reify proto/Transport
+                 (read-msg [_]
+                   (when (seq @inbox)
+                     (let [m (first @inbox)] (swap! inbox rest) m)))
+                 (write-msg [_ m] (swap! outbox conj m)))]
+    (core/run-server t {:select-receptor (fn [_init] (receptor/null-receptor))})
+    @outbox))
+
+(deftest run-server-survives-any-throwable-from-one-request
+  (doseq [[label thrown] [["a real StackOverflowError"
+                           (fn [] (letfn [(deep [n] (inc (deep n)))] (deep 0)))]
+                          ["an AssertionError" #(assert false "broken invariant")]
+                          ["an exception" #(throw (ex-info "boom" {}))]
+                          ["a bare Throwable" #(throw (Throwable. "odd"))]]]
+    (testing label
+      (defmethod core/handle-method "test/explode" [_] (thrown))
+      (try
+        (let [out (run-messages [{:jsonrpc "2.0" :id 1 :method "test/explode"}
+                                 {:jsonrpc "2.0" :method "test/explode"}
+                                 {:jsonrpc "2.0" :id 2 :method "prompts/list"}])]
+          (is (= 2 (count out)) "one error for the request, none for the notification")
+          (is (= 1 (:id (first out))))
+          (is (= -32603 (get-in (first out) [:error :code])))
+          (is (= (proto/json-rpc-response 2 {:prompts []}) (second out))
+              "the next request is still answered"))
+        (finally (remove-method core/handle-method "test/explode"))))))
+
+(deftest a-huge-resource-uri-is-answered-and-the-server-goes-on
+  (let [huge (apply str "workflow://a" (repeat 50000 "/a"))
+        out  (run-messages [{:jsonrpc "2.0" :id 1 :method "resources/read" :params {:uri huge}}
+                            {:jsonrpc "2.0" :id 2 :method "prompts/list"}])]
+    (is (= [1 2] (mapv :id out)))
+    (is (= -32002 (get-in (first out) [:error :code])) "refused before the host, as not found")
+    (is (= (proto/json-rpc-response 2 {:prompts []}) (second out)))))
+
 (deftest stdio-transport-roundtrip-test
   (testing "StdioTransport reads a newline-delimited message and writes JSON + newline"
     (is (= {:method "initialized"}

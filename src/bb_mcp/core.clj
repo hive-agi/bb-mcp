@@ -348,6 +348,23 @@
   (receptor/disarm! r)
   (select-receptor init-request))
 
+(defn- answer-safely
+  "The response to `msg`, or, when handling it throws ANY Throwable (a
+   StackOverflowError or an AssertionError as much as an Exception), a
+   -32603 error for a request and nothing for a notification. One request
+   can never end the session; the cause goes to stderr."
+  [msg]
+  (try
+    (handle-method msg)
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "bb-mcp: " (:method msg) " failed: "
+                      (.getName (class t)) ": " (ex-message t))))
+      (when (some? (:id msg))
+        (proto/json-rpc-error (:id msg) -32603
+                              (str "Internal error: " (.getName (class t))
+                                   (when-let [m (ex-message t)] (str ": " m))))))))
+
 (def ^:private default-workers
   "Concurrent `tools/call` workers. `BB_MCP_WORKERS` overrides it; 0 runs
    every call inline on the read loop."
@@ -397,7 +414,10 @@
    the first message AFTER it, i.e. once the handshake is done, so no channel
    event can precede the initialize result. It is disarmed when input ends.
    Every write, response or notification, goes through one serialised
-   transport: one lock per whole message, never interleaved."
+   transport: one lock per whole message, never interleaved. A request
+   handled inline whose handling throws is answered with an error (see
+   `answer-safely`), and a worker call that throws with `call-failed`;
+   either way the loop reads the next message."
   ([] (run-server (proto/stdio-transport)))
   ([transport] (run-server transport {}))
   ([transport {:keys [select-receptor workers drain-ms]
@@ -423,7 +443,7 @@
              (inflight/cancel! p (cancelled-id msg))
 
              :else
-             (when-let [response (handle-method msg')]
+             (when-let [response (answer-safely msg')]
                (send response)))
            (when-not initialize? (receptor/arm! r t))
            (recur r))
