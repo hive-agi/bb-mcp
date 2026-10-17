@@ -7,7 +7,8 @@
   (:require [bb-mcp.tools.bash.remote :as remote]
             [bb-mcp.tools.bash.spec :as spec]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]))
+            [clojure.test :refer [deftest is testing]]
+            [bb-mcp.tools.nrepl :as nrepl]))
 
 (defn- transport
   "An eval-fn answering `edn` the way nREPL does: pr-str of our pr-str.
@@ -78,6 +79,68 @@
                              :port-fn (constantly 7910)})]
       (is (= -1 (:exit-code r)))
       (is (str/includes? (:stderr r) "socket closed")))))
+
+(defn- refusing-open
+  "An IByteChannel opener that refuses every port in `down`, the way cljw.net
+  does when nothing listens. Records each port it was asked for in `asked`."
+  [asked down]
+  (fn [{:keys [port]}]
+    (swap! asked conj port)
+    (when (contains? down port)
+      (throw (ex-info (str "cljw.net: could not connect to 'localhost:" port "'")
+                      {:port port})))
+    (throw (ex-info "unexpected open in this stub" {:port port}))))
+
+(deftest refused-connection-is-tagged-by-the-client
+  (testing "nrepl/eval-code marks a refused open as :connect-failed?"
+    (let [asked (atom [])
+          r (nrepl/eval-code {:port 7932 :code "(+ 1 2)"
+                              :open-fn (refusing-open asked #{7932})})]
+      (is (true? (:error? r)))
+      (is (true? (:connect-failed? r)))
+      (is (str/includes? (:result r) "localhost:7932"))
+      (is (= [7932] @asked)))))
+
+(deftest refused-everywhere-names-owner-and-recovery
+  (testing "both ports refuse: the error names the owner, how to start it, and why there is no local exec"
+    (let [asked (atom [])
+          eval-fn (fn [req] (nrepl/eval-code (assoc req :open-fn (refusing-open asked #{7932 7910}))))
+          r (remote/execute {:command "git status"}
+                            {:eval-fn eval-fn :port-fn (constantly 7932)})]
+      (is (= [7932 7910] @asked) "the resolved port first, then hive-mcp's own")
+      (is (= -1 (:exit-code r)))
+      (is (str/includes? (:stderr r) "localhost:7932, localhost:7910"))
+      (is (str/includes? (:stderr r) "hive-mcp JVM nREPL"))
+      (is (str/includes? (:stderr r) "`hive-mcp` launcher"))
+      (is (str/includes? (:stderr r) ".nrepl-port"))
+      (is (str/includes? (:stderr r) "No local fallback"))
+      (is (str/includes? (:stderr r) "BB_MCP_RUNTIME=bb")))))
+
+(deftest refused-port-falls-back-to-hive-mcp-port
+  (testing "a stale resolved port refuses; hive-mcp's port answers and the command runs"
+    (let [seen (atom [])
+          eval-fn (fn [{:keys [port] :as req}]
+                    (swap! seen conj port)
+                    (if (= 7932 port)
+                      {:error? true :connect-failed? true
+                       :result "cljw.net: could not connect to 'localhost:7932'"}
+                      ((transport (atom nil) {:ok {:exit 0 :stdout "clean\n" :stderr ""}}) req)))
+          r (remote/execute {:command "git status"}
+                            {:eval-fn eval-fn :port-fn (constantly 7932)})]
+      (is (= [7932 7910] @seen))
+      (is (= 0 (:exit-code r)))
+      (is (= "clean\n" (:stdout r))))))
+
+(deftest failure-after-connect-is-never-retried
+  (testing "an error once connected is not a refusal: the command is sent once"
+    (let [seen (atom [])
+          r (remote/execute {:command "touch x"}
+                            {:eval-fn (fn [{:keys [port]}]
+                                        (swap! seen conj port)
+                                        {:error? true :result "Read timed out"})
+                             :port-fn (constantly 7932)})]
+      (is (= [7932] @seen))
+      (is (str/includes? (:stderr r) "Read timed out")))))
 
 (deftest request-carries-the-guarded-inputs
   (testing "working directory and timeout reach exec!, and the deadline has headroom"

@@ -18,7 +18,8 @@
    as {:ok {:error :shell/timeout}}. Both are accepted."
   (:require [bb-mcp.tools.bash.spec :as spec]
             [bb-mcp.tools.nrepl :as nrepl]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [clojure.string :as str]))
 
 (def tool-spec spec/tool-spec)
 
@@ -59,6 +60,30 @@
     :else {:exit-code -1 :stdout "" :stderr (str "unreadable shell result: " (pr-str r))
            :error (str "unreadable shell result (timeout was " timeout "ms)")}))
 
+(def ^:private hive-mcp-port
+  "The port every forwarded hive tool reaches hive-mcp on
+  (`bb-mcp.tools.hive.dynamic`). Tried after the resolved port refuses."
+  7910)
+
+(defn unreachable-message
+  "Pure. The stderr text for a bash call no nREPL accepted.
+
+  `ports` are the ports tried, in order; `cause` the last transport message.
+  Names the owner of the port, how to start it, and why there is no local
+  fallback on this runtime."
+  [ports cause]
+  (str "bash runs in the hive-mcp JVM on this runtime, and it did not answer: "
+       cause "\n"
+       "Tried localhost:" (str/join ", localhost:" ports)
+       " (resolved from BB_MCP_NREPL_PORT, else <project>/.nrepl-port, "
+       "then hive-mcp's default " hive-mcp-port ").\n"
+       "Owner: the hive-mcp JVM nREPL, started by its own `hive-mcp` launcher, "
+       "never by bb-mcp. A project .nrepl-port that points at a stopped REPL "
+       "also lands here: remove it or set BB_MCP_NREPL_PORT to hive-mcp's port.\n"
+       "No local fallback: this bb-mcp runtime has no subprocess surface. "
+       "Start hive-mcp, or restart bb-mcp with BB_MCP_RUNTIME=bb to run bash "
+       "as a local subprocess."))
+
 (defn execute
   "Run `command` in the hive-mcp JVM and return `bb-mcp.tools.bash`'s shape.
 
@@ -67,22 +92,42 @@
 
    The transport is a collaborator, not a dependency: the 2-arity takes the
    `:eval-fn` that carries a request to the JVM, so a test drives this with a
-   stub instead of a live nREPL."
+   stub instead of a live nREPL.
+
+   Port: `:port-fn` first, then hive-mcp's own port, the one the forwarded
+   tools use. The second port is tried only when the first refused the
+   CONNECTION (`:connect-failed?`), so a command is never sent twice."
   ([args] (execute args {:eval-fn nrepl/eval-code
                          :port-fn nrepl/get-nrepl-port}))
   ([{:keys [command working_directory timeout_ms _caller_cwd]}
-    {:keys [eval-fn port-fn]}]
+    {:keys [eval-fn port-fn fallback-port]
+     :or {fallback-port hive-mcp-port}}]
    (let [timeout (or timeout_ms 180000)
-        dir (or working_directory _caller_cwd)
-        opts (cond-> {:timeout-ms timeout} dir (assoc :dir dir))
-        res (try
-              (eval-fn {:port (port-fn)
-                        :code (remote-form command opts)
-                        :timeout-ms (+ timeout nrepl-grace-ms)})
-              (catch Exception e {:error? true :result (ex-message e)}))]
-     (if (:error? res)
+         dir (or working_directory _caller_cwd)
+         opts (cond-> {:timeout-ms timeout} dir (assoc :dir dir))
+         code (remote-form command opts)
+         call (fn [port]
+                (try
+                  (eval-fn {:port port
+                            :code code
+                            :timeout-ms (+ timeout nrepl-grace-ms)})
+                  (catch Exception e {:error? true :result (ex-message e)})))
+         ports (distinct (remove nil? [(port-fn) fallback-port]))
+         [res tried] (loop [[p & more] ports tried []]
+                       (let [r (call p) tried' (conj tried p)]
+                         (if (and (:connect-failed? r) (seq more))
+                           (recur more tried')
+                           [r tried'])))]
+     (cond
+       (:connect-failed? res)
+       (let [msg (unreachable-message tried (:result res))]
+         {:exit-code -1 :stdout "" :stderr msg :error (str (:result res))})
+
+       (:error? res)
        {:exit-code -1 :stdout ""
         :stderr (str "bash runs in the hive-mcp JVM on this runtime, and it did "
                      "not answer: " (:result res))
         :error (str (:result res))}
+
+       :else
        (->result (-> (:result res) edn/read-string edn/read-string) timeout)))))

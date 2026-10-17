@@ -104,19 +104,23 @@
 (defrecord BencodeNReplClient [host port open-fn]
   NReplClient
   (eval-code* [_ code {:keys [timeout-ms]}]
-    (let [ch (volatile! nil)]
-      (try
-        (vreset! ch (open-fn {:host (or host "localhost")
-                              :port port
-                              :timeout-ms (or timeout-ms 600000)}))
-        (hp/write-bytes! @ch (bencode/encode {:op "eval" :code code}))
-        (messages->result (read-messages! @ch))
-        (catch Exception e
-          {:result (str "nREPL connection failed: " (ex-message e))
-           :error? true})
-        (finally
-          (when-let [c @ch]
-            (try (hp/close! c) (catch Exception _ nil))))))))
+    (let [opened (try {:ch (open-fn {:host (or host "localhost")
+                                     :port port
+                                     :timeout-ms (or timeout-ms 600000)})}
+                      (catch Exception e {:failure e}))]
+      (if-let [e (:failure opened)]
+        {:result (str "nREPL connection failed: " (ex-message e))
+         :error? true
+         :connect-failed? true}
+        (let [ch (:ch opened)]
+          (try
+            (hp/write-bytes! ch (bencode/encode {:op "eval" :code code}))
+            (messages->result (read-messages! ch))
+            (catch Exception e
+              {:result (str "nREPL connection failed: " (ex-message e))
+               :error? true})
+            (finally
+              (try (hp/close! ch) (catch Exception _ nil)))))))))
 
 (defn eval-code
   "Evaluate Clojure code on a remote nREPL server.
