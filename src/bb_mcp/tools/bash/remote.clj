@@ -60,11 +60,6 @@
     :else {:exit-code -1 :stdout "" :stderr (str "unreadable shell result: " (pr-str r))
            :error (str "unreadable shell result (timeout was " timeout "ms)")}))
 
-(def ^:private hive-mcp-port
-  "The port every forwarded hive tool reaches hive-mcp on
-  (`bb-mcp.tools.hive.dynamic`). Tried after the resolved port refuses."
-  7910)
-
 (def ^:private hive-build-nrepl-port
   "The port of the `:nrepl` alias in hive/hive-build/deps.edn."
   7932)
@@ -74,9 +69,9 @@
 
   `ports` are the ports tried, in order; `cause` the last transport message;
   `resolved` the first port's {:port :source ...} from
-  `nrepl/resolve-nrepl-port`, when known. Names where that port came from,
-  the owner of the port, how to start it, and why there is no local fallback
-  on this runtime."
+  `nrepl/resolve-hive-port`, when known. Names where that port came from,
+  which settings bash reads and which it never reads, the owner of the port,
+  how to start it, and why there is no local fallback on this runtime."
   ([ports cause] (unreachable-message ports cause nil))
   ([ports cause resolved]
    (let [origin (nrepl/describe-port-source resolved)]
@@ -84,18 +79,16 @@
           cause "\n"
           "Tried localhost:" (str/join ", localhost:" ports)
           (if origin
-            (str "; port " (:port resolved) " came from " origin
-                 (when (next ports)
-                   (str ", then hive-mcp's default " hive-mcp-port))
-                 ".\n")
-            (str " (resolved from BB_MCP_NREPL_PORT, else <project>/.nrepl-port, "
-                 "then hive-mcp's default " hive-mcp-port ").\n"))
+            (str "; port " (:port resolved) " came from " origin ".\n")
+            ".\n")
+          "bash dials the hive-mcp host: " nrepl/hive-port-var ", else "
+          nrepl/default-nrepl-port "; never BB_MCP_NREPL_PORT nor a project "
+          ".nrepl-port, which name a project REPL for clojure_eval.\n"
           (when (= hive-build-nrepl-port (:port resolved))
             (str hive-build-nrepl-port " is the port of the :nrepl alias in "
                  "hive-build's deps.edn, a build REPL, not hive-mcp.\n"))
           "Owner: the hive-mcp JVM nREPL, started by its own `hive-mcp` launcher, "
-          "never by bb-mcp. A project .nrepl-port that points at a stopped REPL "
-          "also lands here: remove it or set BB_MCP_NREPL_PORT to hive-mcp's port.\n"
+          "never by bb-mcp.\n"
           "No local fallback: this bb-mcp runtime has no subprocess surface. "
           "Start hive-mcp, or restart bb-mcp with BB_MCP_RUNTIME=bb to run bash "
           "as a local subprocess."))))
@@ -110,36 +103,30 @@
    `:eval-fn` that carries a request to the JVM, so a test drives this with a
    stub instead of a live nREPL.
 
-   Port: `:resolve-fn` answers {:port :source ...} (see
-   `nrepl/resolve-nrepl-port`); a bare-int `:port-fn` is still accepted and
-   carries no source. Then hive-mcp's own port, the one the forwarded tools
-   use. The second port is tried only when the first refused the CONNECTION
-   (`:connect-failed?`), so a command is never sent twice."
-  ([args] (execute args {:eval-fn nrepl/eval-code
-                         :resolve-fn nrepl/resolve-nrepl-port}))
+   Port: the hive-mcp host's, `nrepl/resolve-hive-port` over `:getenv`
+   (default the real env). Never BB_MCP_NREPL_PORT nor a project
+   .nrepl-port. `:resolve-fn` (-> {:port :source ...}) or a bare-int
+   `:port-fn` replaces that resolution. One port, dialed once: a refusal is
+   reported, never retried elsewhere."
+  ([args] (execute args {:eval-fn nrepl/eval-code}))
   ([{:keys [command working_directory timeout_ms _caller_cwd]}
-    {:keys [eval-fn resolve-fn port-fn fallback-port]
-     :or {fallback-port hive-mcp-port}}]
+    {:keys [eval-fn resolve-fn port-fn getenv]
+     :or {getenv #(System/getenv %)}}]
    (let [timeout (or timeout_ms 180000)
          dir (or working_directory _caller_cwd)
          opts (cond-> {:timeout-ms timeout} dir (assoc :dir dir))
          code (remote-form command opts)
-         call (fn [port]
-                (try
-                  (eval-fn {:port port
-                            :code code
-                            :timeout-ms (+ timeout nrepl-grace-ms)})
-                  (catch Exception e {:error? true :result (ex-message e)})))
-         resolved (if resolve-fn (resolve-fn) {:port (port-fn)})
-         ports (distinct (remove nil? [(:port resolved) fallback-port]))
-         [res tried] (loop [[p & more] ports tried []]
-                       (let [r (call p) tried' (conj tried p)]
-                         (if (and (:connect-failed? r) (seq more))
-                           (recur more tried')
-                           [r tried'])))]
+         resolved (cond resolve-fn (resolve-fn)
+                        port-fn {:port (port-fn)}
+                        :else (nrepl/resolve-hive-port getenv))
+         res (try
+               (eval-fn {:port (:port resolved)
+                         :code code
+                         :timeout-ms (+ timeout nrepl-grace-ms)})
+               (catch Exception e {:error? true :result (ex-message e)}))]
      (cond
        (:connect-failed? res)
-       (let [msg (unreachable-message tried (:result res) resolved)]
+       (let [msg (unreachable-message [(:port resolved)] (:result res) resolved)]
          {:exit-code -1 :stdout "" :stderr msg :error (str (:result res))})
 
        (:error? res)

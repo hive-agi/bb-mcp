@@ -31,3 +31,18 @@
                                                                          :read-port-file (constantly nil)})})]
       (is (str/includes? (:result r) "port 7999"))
       (is (str/includes? (:result r) "the explicit port parameter")))))
+
+(deftest the-hive-port-says-where-it-came-from
+  (testing "nothing set: hive-mcp's default"
+    (is (= {:port 7910 :source :default} (nrepl/resolve-hive-port {}))))
+  (testing "a project port is not a hive port"
+    (is (= {:port 7910 :source :default}
+           (nrepl/resolve-hive-port {"BB_MCP_NREPL_PORT" "7934"}))))
+  (testing "BB_MCP_HIVE_NREPL_PORT, trimmed, names its var"
+    (is (= {:port 7950 :source :env :env-var "BB_MCP_HIVE_NREPL_PORT"}
+           (nrepl/resolve-hive-port {"BB_MCP_HIVE_NREPL_PORT" " 7950\n"}))))
+  (testing "a non-number falls back to the default"
+    (is (= {:port 7910 :source :default}
+           (nrepl/resolve-hive-port {"BB_MCP_HIVE_NREPL_PORT" "  "}))))
+  (testing "hive-port is the bare port of the same answer"
+    (is (= 7950 (nrepl/hive-port {"BB_MCP_HIVE_NREPL_PORT" "7950"})))))

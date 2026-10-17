@@ -458,10 +458,11 @@
            (receptor/disarm! r)))))))
 
 (defn- warn-unless-nrepl-reachable!
-  "Print a startup hint to stderr when no nREPL answers on the resolved port.
+  "Print a startup hint to stderr when no nREPL answers on the hive-mcp
+  host's port, `nrepl/hive-port`, the one forwarded tools and bash dial.
   The hive-mcp JVM is started by its own launcher, never by this process."
   []
-  (let [port (nrepl/get-nrepl-port)]
+  (let [port (nrepl/hive-port)]
     (when-not (try
                 (hp/close! (hp/open {:port port :timeout-ms 1000}))
                 true
@@ -474,13 +475,14 @@
 (defn- warn-where-bash-runs!
   "State the executor when bash is NOT this process's own subprocess, so a
   command that lands in another process is a stated fact rather than a
-  surprise in a stack trace."
+  surprise in a stack trace. The port named is the one bash dials,
+  `nrepl/hive-port`."
   []
   (when-not (local-bash)
     (binding [*out* *err*]
       (println (str "bb-mcp: no subprocess surface on this runtime ("
                     (hp/adapter-ns) ") — bash runs in the hive-mcp JVM, "
-                    "over the nREPL socket on port " (nrepl/get-nrepl-port) ".")))))
+                    "over the nREPL socket on port " (nrepl/hive-port) ".")))))
 
 (defn- start-release-notice!
   "Tell the user, on stderr, when a newer bb-mcp release exists.

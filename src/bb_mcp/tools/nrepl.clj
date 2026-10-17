@@ -237,17 +237,24 @@ Examples:
   "Env var naming the hive-mcp host's own nREPL port."
   "BB_MCP_HIVE_NREPL_PORT")
 
-(defn hive-port
-  "The nREPL port of the hive-mcp host: `hive-port-var` when it holds a
-   number, else 7910. Unlike `get-nrepl-port` it never reads a project's
-   .nrepl-port nor BB_MCP_NREPL_PORT, which the launcher fills from that
-   file: those name the REPL of the project being worked on. Every call that
-   must land in the hive host (forwarded tools, tool loading, resources)
-   dials this one port. `getenv` is injectable for tests."
-  ([] (hive-port #(System/getenv %)))
+(defn resolve-hive-port
+  "The nREPL port of the hive-mcp host and where it came from:
+   {:port n :source :env :env-var `hive-port-var`} when that var holds a
+   number, else {:port 7910 :source :default}. Never reads a project's
+   .nrepl-port nor BB_MCP_NREPL_PORT. `getenv` (name -> string) is
+   injectable; the 0-arity reads the real env."
+  ([] (resolve-hive-port #(System/getenv %)))
   ([getenv]
-   (or (some-> (getenv hive-port-var) str/trim not-empty parse-long)
-       7910)))
+   (if-let [p (some-> (getenv hive-port-var) str/trim not-empty parse-long)]
+     {:port p :source :env :env-var hive-port-var}
+     {:port default-nrepl-port :source :default})))
+
+(defn hive-port
+  "The nREPL port of the hive-mcp host, as a bare int: the :port of
+   `resolve-hive-port`. Every call that must land in the hive host
+   (forwarded tools, tool loading, resources, bash) dials this one port."
+  ([] (hive-port #(System/getenv %)))
+  ([getenv] (:port (resolve-hive-port getenv))))
 
 (defn execute
   "Execute Clojure code via nREPL. A connection failure names the port, where
