@@ -103,17 +103,17 @@
       (is (= [7932] @asked)))))
 
 (deftest refused-everywhere-names-owner-and-recovery
-  (testing "both ports refuse: the error names the owner, how to start it, and why there is no local exec"
+  (testing "the port refuses: the error names the owner, how to start it, and why there is no local exec"
     (let [asked (atom [])
           eval-fn (fn [req] (nrepl/eval-code (assoc req :open-fn (refusing-open asked #{7932 7910}))))
           r (remote/execute {:command "git status"}
                             {:eval-fn eval-fn :port-fn (constantly 7932)})]
-      (is (= [7932 7910] @asked) "the resolved port first, then hive-mcp's own")
+      (is (= [7932] @asked) "one port, dialed once")
       (is (= -1 (:exit-code r)))
-      (is (str/includes? (:stderr r) "localhost:7932, localhost:7910"))
+      (is (str/includes? (:stderr r) "Tried localhost:7932."))
       (is (str/includes? (:stderr r) "hive-mcp JVM nREPL"))
       (is (str/includes? (:stderr r) "`hive-mcp` launcher"))
-      (is (str/includes? (:stderr r) ".nrepl-port"))
+      (is (str/includes? (:stderr r) "BB_MCP_HIVE_NREPL_PORT"))
       (is (str/includes? (:stderr r) "No local fallback"))
       (is (str/includes? (:stderr r) "BB_MCP_RUNTIME=bb")))))
 
@@ -147,7 +147,7 @@
   (let [refuse (fn [{:keys [port]}]
                  {:error? true :connect-failed? true
                   :result (str "cljw.net: could not connect to 'localhost:" port "'")})]
-    (testing "a stale .nrepl-port is named by path, with the hive-build hint for 7932"
+    (testing "an injected .nrepl-port source is named by path, with the hive-build hint for 7932"
       (let [r (remote/execute {:command "git status"}
                               {:eval-fn refuse
                                :resolve-fn (constantly {:port 7932 :source :nrepl-port-file
@@ -158,29 +158,65 @@
       (let [r (remote/execute {:command "git status"}
                               {:eval-fn refuse
                                :resolve-fn (constantly {:port 7000 :source :env
-                                                        :env-var "BB_MCP_NREPL_PORT"})})]
-        (is (str/includes? (:stderr r) "port 7000 came from the BB_MCP_NREPL_PORT env var"))
+                                                        :env-var "BB_MCP_HIVE_NREPL_PORT"})})]
+        (is (str/includes? (:stderr r) "port 7000 came from the BB_MCP_HIVE_NREPL_PORT env var"))
         (is (not (str/includes? (:stderr r) "hive-build")))))
-    (testing "a bare-int :port-fn still works and keeps the generic wording"
+    (testing "a bare-int :port-fn carries no source and claims none"
       (let [r (remote/execute {:command "git status"}
                               {:eval-fn refuse :port-fn (constantly 7000)})]
-        (is (str/includes? (:stderr r) "localhost:7000, localhost:7910"))
-        (is (str/includes? (:stderr r) "resolved from BB_MCP_NREPL_PORT"))))))
+        (is (str/includes? (:stderr r) "Tried localhost:7000."))
+        (is (not (str/includes? (:stderr r) "came from")))))))
 
-(deftest refused-port-falls-back-to-hive-mcp-port
-  (testing "a stale resolved port refuses; hive-mcp's port answers and the command runs"
+(defn- recording-ok
+  "An eval-fn that records each dialed port in `seen` and answers exit 0."
+  [seen]
+  (fn [{:keys [port] :as req}]
+    (swap! seen conj port)
+    ((transport (atom nil) {:ok {:exit 0 :stdout "ok\n" :stderr ""}}) req)))
+
+(defn- recording-refuse
+  "An eval-fn that records each dialed port in `seen` and refuses it the way
+  cljw.net does."
+  [seen]
+  (fn [{:keys [port]}]
+    (swap! seen conj port)
+    {:error? true :connect-failed? true
+     :result (str "cljw.net: could not connect to 'localhost:" port "'")}))
+
+(deftest bash-dials-the-hive-host-never-the-project-repl
+  (testing "BB_MCP_NREPL_PORT (the launcher's copy of <project>/.nrepl-port) is not dialed"
     (let [seen (atom [])
-          eval-fn (fn [{:keys [port] :as req}]
-                    (swap! seen conj port)
-                    (if (= 7932 port)
-                      {:error? true :connect-failed? true
-                       :result "cljw.net: could not connect to 'localhost:7932'"}
-                      ((transport (atom nil) {:ok {:exit 0 :stdout "clean\n" :stderr ""}}) req)))
+          r (remote/execute {:command "true"}
+                            {:eval-fn (recording-ok seen)
+                             :getenv {"BB_MCP_NREPL_PORT" "7934"}})]
+      (is (= [7910] @seen))
+      (is (= 0 (:exit-code r)))))
+  (testing "BB_MCP_HIVE_NREPL_PORT moves the hive host, and wins over BB_MCP_NREPL_PORT"
+    (let [seen (atom [])]
+      (remote/execute {:command "true"}
+                      {:eval-fn (recording-ok seen)
+                       :getenv {"BB_MCP_HIVE_NREPL_PORT" "7950"
+                                "BB_MCP_NREPL_PORT" "7934"}})
+      (is (= [7950] @seen)))))
+
+(deftest a-refused-hive-port-is-dialed-once-and-named
+  (testing "an env-set hive port refuses: one dial, the var is named, no project port is offered"
+    (let [seen (atom [])
           r (remote/execute {:command "git status"}
-                            {:eval-fn eval-fn :port-fn (constantly 7932)})]
-      (is (= [7932 7910] @seen))
-      (is (= 0 (:exit-code r)))
-      (is (= "clean\n" (:stdout r))))))
+                            {:eval-fn (recording-refuse seen)
+                             :getenv {"BB_MCP_HIVE_NREPL_PORT" "7950"
+                                      "BB_MCP_NREPL_PORT" "7934"}})]
+      (is (= [7950] @seen) "one hive host, so nothing to fall back to")
+      (is (= -1 (:exit-code r)))
+      (is (str/includes? (:stderr r) "port 7950 came from the BB_MCP_HIVE_NREPL_PORT env var"))
+      (is (str/includes? (:stderr r) "never BB_MCP_NREPL_PORT nor a project .nrepl-port"))
+      (is (not (str/includes? (:stderr r) "7934")))))
+  (testing "the default hive port refuses: named as the default"
+    (let [seen (atom [])
+          r (remote/execute {:command "git status"}
+                            {:eval-fn (recording-refuse seen) :getenv {}})]
+      (is (= [7910] @seen))
+      (is (str/includes? (:stderr r) "port 7910 came from the built-in default")))))
 
 (deftest failure-after-connect-is-never-retried
   (testing "an error once connected is not a refusal: the command is sent once"
