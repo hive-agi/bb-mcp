@@ -19,7 +19,8 @@
             [bb-mcp.resources-test]
             [bb-mcp.resources-policy-test]
             [bb-mcp.concurrent-test]
-            [bb-mcp.tools.always-load-test]))
+            [bb-mcp.tools.always-load-test]
+            [bb-mcp.tools.nrepl-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -28,6 +29,7 @@
    'bb-mcp.tools.dynamic-test
    'bb-mcp.tools.hive.compact-test
    'bb-mcp.tools.always-load-test
+   'bb-mcp.tools.nrepl-test
    'bb-mcp.wire.bencode-test
    'bb-mcp.wire.bencode-props-test
    'bb-mcp.wire.bencode-mutation-test

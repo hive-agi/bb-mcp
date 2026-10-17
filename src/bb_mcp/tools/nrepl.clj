@@ -130,24 +130,37 @@
                                     (or open-fn hp/open))
               code opts))
 
+(def port-steps
+  "How clojure_eval picks its nREPL, in order. Stated in the tool description
+   and in every connection failure."
+  ["1. the port parameter"
+   "2. the BB_MCP_NREPL_PORT env var of this bb-mcp server"
+   "3. <BB_MCP_PROJECT_DIR>/.nrepl-port (the server's project dir, NOT your working directory)"
+   "4. 7910, hive-mcp's own live JVM"])
+
+(def port-order
+  "`port-steps` on one line."
+  (str/join "; " port-steps))
+
 (def tool-spec
   {:name "clojure_eval"
-   :description "Evaluate Clojure code on a shared nREPL server.
+   :description (str "Evaluate Clojure code on a shared nREPL server.
 
-Port resolution order:
-1. Explicit port parameter
-2. BB_MCP_NREPL_PORT env var
-3. .nrepl-port file in BB_MCP_PROJECT_DIR
-4. Default: 7910 (hive-mcp nREPL)
+Port resolution order, per call:
+" (str/join "\n" port-steps) "
+
+Steps 2-4 belong to the bb-mcp server, not to your worktree: to evaluate in a
+worktree's own nREPL, pass the port from that worktree's .nrepl-port. Step 4
+is the running coordinator; never run tests or :reload there.
 
 Examples:
-- clojure_eval(code: \"(+ 1 2)\")
-- clojure_eval(code: \"(require '[my.ns])\", port: 7910)"
+- clojure_eval(code: \"(+ 1 2)\", port: 7946)
+- clojure_eval(code: \"(require '[my.ns])\", port: 7946)")
    :schema {:type "object"
             :properties {:code {:type "string"
                                 :description "Clojure code to evaluate"}
                          :port {:type "integer"
-                                :description "nREPL port (auto-discovered if not specified)"}
+                                :description "nREPL port for this call. Omitted: BB_MCP_NREPL_PORT, then <BB_MCP_PROJECT_DIR>/.nrepl-port, then 7910 (hive-mcp)."}
                          :timeout_ms {:type "integer"
                                       :description "Timeout in ms (default: 600000 / 10 min). Long-running tools like wave dispatch may take several minutes."}}
             :required ["code"]}})
@@ -237,9 +250,18 @@ Examples:
        7910)))
 
 (defn execute
-  "Execute Clojure code via nREPL."
-  [{:keys [code port timeout_ms]}]
-  (let [port (or port (get-nrepl-port))]
-    (eval-code {:port port
-                :code code
-                :timeout-ms (or timeout_ms 600000)})))
+  "Execute Clojure code via nREPL. A connection failure names the port, where
+   it came from, and `port-order`. `opts` injects :resolve-port (explicit ->
+   the `resolve-nrepl-port` map) and :open-fn for tests."
+  ([params] (execute params {}))
+  ([{:keys [code port timeout_ms]} {:keys [resolve-port open-fn]
+                                    :or {resolve-port #(resolve-nrepl-port % {})}}]
+   (let [resolved (resolve-port port)
+         r (eval-code {:port (:port resolved)
+                       :code code
+                       :open-fn open-fn
+                       :timeout-ms (or timeout_ms 600000)})]
+     (if (:connect-failed? r)
+       (update r :result str " (port " (:port resolved) ", from "
+               (describe-port-source resolved) "). Resolution order: " port-order)
+       r))))
