@@ -5,11 +5,13 @@
             [bb-mcp.setup.model-test]
             [bb-mcp.setup.toml-test]
             [clojure.test :as test]
-            [bb-mcp.update-test]))
+            [bb-mcp.update-test]
+            [bb-mcp.doctor-test]))
 
 (defn -main [& _args]
   (let [{:keys [fail error]} (test/run-tests 'bb-mcp.setup.model-test
                                              'bb-mcp.setup.toml-test
                                              'bb-mcp.setup.fs-test
-                                             'bb-mcp.update-test)]
+                                             'bb-mcp.update-test
+                                             'bb-mcp.doctor-test)]
     (System/exit (if (zero? (+ fail error)) 0 1))))

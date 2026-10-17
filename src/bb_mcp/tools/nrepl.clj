@@ -104,19 +104,23 @@
 (defrecord BencodeNReplClient [host port open-fn]
   NReplClient
   (eval-code* [_ code {:keys [timeout-ms]}]
-    (let [ch (volatile! nil)]
-      (try
-        (vreset! ch (open-fn {:host (or host "localhost")
-                              :port port
-                              :timeout-ms (or timeout-ms 600000)}))
-        (hp/write-bytes! @ch (bencode/encode {:op "eval" :code code}))
-        (messages->result (read-messages! @ch))
-        (catch Exception e
-          {:result (str "nREPL connection failed: " (ex-message e))
-           :error? true})
-        (finally
-          (when-let [c @ch]
-            (try (hp/close! c) (catch Exception _ nil))))))))
+    (let [opened (try {:ch (open-fn {:host (or host "localhost")
+                                     :port port
+                                     :timeout-ms (or timeout-ms 600000)})}
+                      (catch Exception e {:failure e}))]
+      (if-let [e (:failure opened)]
+        {:result (str "nREPL connection failed: " (ex-message e))
+         :error? true
+         :connect-failed? true}
+        (let [ch (:ch opened)]
+          (try
+            (hp/write-bytes! ch (bencode/encode {:op "eval" :code code}))
+            (messages->result (read-messages! ch))
+            (catch Exception e
+              {:result (str "nREPL connection failed: " (ex-message e))
+               :error? true})
+            (finally
+              (try (hp/close! ch) (catch Exception _ nil)))))))))
 
 (defn eval-code
   "Evaluate Clojure code on a remote nREPL server.
@@ -126,24 +130,37 @@
                                     (or open-fn hp/open))
               code opts))
 
+(def port-steps
+  "How clojure_eval picks its nREPL, in order. Stated in the tool description
+   and in every connection failure."
+  ["1. the port parameter"
+   "2. the BB_MCP_NREPL_PORT env var of this bb-mcp server"
+   "3. <BB_MCP_PROJECT_DIR>/.nrepl-port (the server's project dir, NOT your working directory)"
+   "4. 7910, hive-mcp's own live JVM"])
+
+(def port-order
+  "`port-steps` on one line."
+  (str/join "; " port-steps))
+
 (def tool-spec
   {:name "clojure_eval"
-   :description "Evaluate Clojure code on a shared nREPL server.
+   :description (str "Evaluate Clojure code on a shared nREPL server.
 
-Port resolution order:
-1. Explicit port parameter
-2. BB_MCP_NREPL_PORT env var
-3. .nrepl-port file in BB_MCP_PROJECT_DIR
-4. Default: 7910 (hive-mcp nREPL)
+Port resolution order, per call:
+" (str/join "\n" port-steps) "
+
+Steps 2-4 belong to the bb-mcp server, not to your worktree: to evaluate in a
+worktree's own nREPL, pass the port from that worktree's .nrepl-port. Step 4
+is the running coordinator; never run tests or :reload there.
 
 Examples:
-- clojure_eval(code: \"(+ 1 2)\")
-- clojure_eval(code: \"(require '[my.ns])\", port: 7910)"
+- clojure_eval(code: \"(+ 1 2)\", port: 7946)
+- clojure_eval(code: \"(require '[my.ns])\", port: 7946)")
    :schema {:type "object"
             :properties {:code {:type "string"
                                 :description "Clojure code to evaluate"}
                          :port {:type "integer"
-                                :description "nREPL port (auto-discovered if not specified)"}
+                                :description "nREPL port for this call. Omitted: BB_MCP_NREPL_PORT, then <BB_MCP_PROJECT_DIR>/.nrepl-port, then 7910 (hive-mcp)."}
                          :timeout_ms {:type "integer"
                                       :description "Timeout in ms (default: 600000 / 10 min). Long-running tools like wave dispatch may take several minutes."}}
             :required ["code"]}})
@@ -160,19 +177,98 @@ Examples:
   []
   (or (System/getenv "BB_MCP_PROJECT_DIR") "."))
 
+(def default-nrepl-port
+  "hive-mcp's own nREPL port."
+  7910)
+
+(def nrepl-port-env "BB_MCP_NREPL_PORT")
+
+(defn- slurp-port-file
+  "The port in the .nrepl-port file at `path`, or nil when there is none."
+  [path]
+  (let [f (java.io.File. ^String path)]
+    (when (.exists f)
+      (parse-long (str/trim (slurp f))))))
+
+(defn resolve-nrepl-port
+  "The nREPL port and where it came from: {:port n :source s ...}.
+
+   Order and :source:
+     explicit port param            :explicit-param
+     BB_MCP_NREPL_PORT env var      :env             (+ :env-var)
+     <project-dir>/.nrepl-port      :nrepl-port-file (+ :path)
+     hive-mcp's port 7910           :default
+
+   The 0-arity reads the real env and filesystem. The 2-arity takes them as
+   collaborators: :getenv (name -> string), :project-dir, :read-port-file
+   (path -> long or nil)."
+  ([] (resolve-nrepl-port nil {}))
+  ([explicit {:keys [getenv project-dir read-port-file]
+              :or {getenv #(System/getenv %)
+                   read-port-file slurp-port-file}}]
+   (let [dir (or project-dir (get-project-dir))
+         path (str dir "/.nrepl-port")]
+     (or (when explicit {:port explicit :source :explicit-param})
+         (when-let [p (some-> (getenv nrepl-port-env) str/trim parse-long)]
+           {:port p :source :env :env-var nrepl-port-env})
+         (when-let [p (read-port-file path)]
+           {:port p :source :nrepl-port-file :path path})
+         {:port default-nrepl-port :source :default}))))
+
+(defn describe-port-source
+  "Pure. Where a resolved port came from, as a phrase: \"/x/.nrepl-port\",
+   \"the BB_MCP_NREPL_PORT env var\", ... nil when the source is unknown."
+  [{:keys [source env-var path]}]
+  (case source
+    :explicit-param "the explicit port parameter"
+    :env (str "the " env-var " env var")
+    :nrepl-port-file path
+    :default "the built-in default (hive-mcp's nREPL)"
+    nil))
+
 (defn get-nrepl-port
-  "Get nREPL port from env, .nrepl-port file, or default.
-   Default is 7910 for hive-mcp nREPL."
+  "Get nREPL port from env, .nrepl-port file, or default, as a bare int.
+   Default is 7910 for hive-mcp nREPL. `resolve-nrepl-port` also says where
+   the port came from."
   []
-  (or (when-let [env-port (System/getenv "BB_MCP_NREPL_PORT")]
-        (parse-long env-port))
-      (find-nrepl-port (get-project-dir))
-      7910))
+  (:port (resolve-nrepl-port)))
+
+(def hive-port-var
+  "Env var naming the hive-mcp host's own nREPL port."
+  "BB_MCP_HIVE_NREPL_PORT")
+
+(defn resolve-hive-port
+  "The nREPL port of the hive-mcp host and where it came from:
+   {:port n :source :env :env-var `hive-port-var`} when that var holds a
+   number, else {:port 7910 :source :default}. Never reads a project's
+   .nrepl-port nor BB_MCP_NREPL_PORT. `getenv` (name -> string) is
+   injectable; the 0-arity reads the real env."
+  ([] (resolve-hive-port #(System/getenv %)))
+  ([getenv]
+   (if-let [p (some-> (getenv hive-port-var) str/trim not-empty parse-long)]
+     {:port p :source :env :env-var hive-port-var}
+     {:port default-nrepl-port :source :default})))
+
+(defn hive-port
+  "The nREPL port of the hive-mcp host, as a bare int: the :port of
+   `resolve-hive-port`. Every call that must land in the hive host
+   (forwarded tools, tool loading, resources, bash) dials this one port."
+  ([] (hive-port #(System/getenv %)))
+  ([getenv] (:port (resolve-hive-port getenv))))
 
 (defn execute
-  "Execute Clojure code via nREPL."
-  [{:keys [code port timeout_ms]}]
-  (let [port (or port (get-nrepl-port))]
-    (eval-code {:port port
-                :code code
-                :timeout-ms (or timeout_ms 600000)})))
+  "Execute Clojure code via nREPL. A connection failure names the port, where
+   it came from, and `port-order`. `opts` injects :resolve-port (explicit ->
+   the `resolve-nrepl-port` map) and :open-fn for tests."
+  ([params] (execute params {}))
+  ([{:keys [code port timeout_ms]} {:keys [resolve-port open-fn]
+                                    :or {resolve-port #(resolve-nrepl-port % {})}}]
+   (let [resolved (resolve-port port)
+         r (eval-code {:port (:port resolved)
+                       :code code
+                       :open-fn open-fn
+                       :timeout-ms (or timeout_ms 600000)})]
+     (if (:connect-failed? r)
+       (update r :result str " (port " (:port resolved) ", from "
+               (describe-port-source resolved) "). Resolution order: " port-order)
+       r))))

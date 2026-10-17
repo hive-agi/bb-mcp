@@ -10,6 +10,9 @@
   setup {:doc "Publish this checkout at ~/.local/share/hive-mcp/bb-mcp and register hive with MCP clients (--help)"
          :task (apply (requiring-resolve 'bb-mcp.setup/-main) *command-line-args*)}
 
+  doctor {:doc "Read-only check of the hive-mcp backend: nREPL port, JVM process, config file"
+          :task (exec 'bb-mcp.doctor/-main)}
+
   test {:doc "Run tests"
         :task (do (shell "bb --config bb.edn -m bb-mcp.test-runner")
                   (shell "bb --config bb.edn -m bb-mcp.setup.suite"))}}}

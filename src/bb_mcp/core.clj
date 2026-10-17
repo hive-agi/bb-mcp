@@ -13,7 +13,8 @@
             [bb-mcp.sense.receptor :as receptor]
             [bb-mcp.async :as async]
             [bb-mcp.resources :as resources]
-            [bb-mcp.inflight :as inflight]))
+            [bb-mcp.inflight :as inflight]
+            [bb-mcp.tools.always-load :as always-load]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -293,7 +294,7 @@
 
 (defmethod handle-method "tools/list" [{:keys [id]}]
   (proto/tools-list-response
-   id (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec))))
+   id (always-load/marked (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec)))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
   (call-tool id (:name params) (:arguments params)))
@@ -347,6 +348,23 @@
   (receptor/disarm! r)
   (select-receptor init-request))
 
+(defn- answer-safely
+  "The response to `msg`, or, when handling it throws ANY Throwable (a
+   StackOverflowError or an AssertionError as much as an Exception), a
+   -32603 error for a request and nothing for a notification. One request
+   can never end the session; the cause goes to stderr."
+  [msg]
+  (try
+    (handle-method msg)
+    (catch Throwable t
+      (binding [*out* *err*]
+        (println (str "bb-mcp: " (:method msg) " failed: "
+                      (.getName (class t)) ": " (ex-message t))))
+      (when (some? (:id msg))
+        (proto/json-rpc-error (:id msg) -32603
+                              (str "Internal error: " (.getName (class t))
+                                   (when-let [m (ex-message t)] (str ": " m))))))))
+
 (def ^:private default-workers
   "Concurrent `tools/call` workers. `BB_MCP_WORKERS` overrides it; 0 runs
    every call inline on the read loop."
@@ -396,7 +414,10 @@
    the first message AFTER it, i.e. once the handshake is done, so no channel
    event can precede the initialize result. It is disarmed when input ends.
    Every write, response or notification, goes through one serialised
-   transport: one lock per whole message, never interleaved."
+   transport: one lock per whole message, never interleaved. A request
+   handled inline whose handling throws is answered with an error (see
+   `answer-safely`), and a worker call that throws with `call-failed`;
+   either way the loop reads the next message."
   ([] (run-server (proto/stdio-transport)))
   ([transport] (run-server transport {}))
   ([transport {:keys [select-receptor workers drain-ms]
@@ -422,7 +443,7 @@
              (inflight/cancel! p (cancelled-id msg))
 
              :else
-             (when-let [response (handle-method msg')]
+             (when-let [response (answer-safely msg')]
                (send response)))
            (when-not initialize? (receptor/arm! r t))
            (recur r))
@@ -437,10 +458,11 @@
            (receptor/disarm! r)))))))
 
 (defn- warn-unless-nrepl-reachable!
-  "Print a startup hint to stderr when no nREPL answers on the resolved port.
+  "Print a startup hint to stderr when no nREPL answers on the hive-mcp
+  host's port, `nrepl/hive-port`, the one forwarded tools and bash dial.
   The hive-mcp JVM is started by its own launcher, never by this process."
   []
-  (let [port (nrepl/get-nrepl-port)]
+  (let [port (nrepl/hive-port)]
     (when-not (try
                 (hp/close! (hp/open {:port port :timeout-ms 1000}))
                 true
@@ -453,13 +475,14 @@
 (defn- warn-where-bash-runs!
   "State the executor when bash is NOT this process's own subprocess, so a
   command that lands in another process is a stated fact rather than a
-  surprise in a stack trace."
+  surprise in a stack trace. The port named is the one bash dials,
+  `nrepl/hive-port`."
   []
   (when-not (local-bash)
     (binding [*out* *err*]
       (println (str "bb-mcp: no subprocess surface on this runtime ("
                     (hp/adapter-ns) ") — bash runs in the hive-mcp JVM, "
-                    "over the nREPL socket on port " (nrepl/get-nrepl-port) ".")))))
+                    "over the nREPL socket on port " (nrepl/hive-port) ".")))))
 
 (defn- start-release-notice!
   "Tell the user, on stderr, when a newer bb-mcp release exists.

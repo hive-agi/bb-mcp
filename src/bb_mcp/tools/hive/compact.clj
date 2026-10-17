@@ -28,6 +28,21 @@
   [env-value]
   (= "compact" (mode env-value)))
 
+(def ^:private code-edit-properties
+  "Parameters a strict MCP client must see to invoke carto editing through code.
+   Other tools retain the small core-only projection. A key absent from the
+   full upstream schema is never invented here."
+  #{"scope" "directory" "file" "qn" "address" "content" "new-body"
+    "ops" "after" "before" "position" "target-ns" "target-file"
+    "source-ns" "source-qns" "moved-qns" "new-ns" "new-name"
+    "new-as" "symbol" "ns" "as" "refer" "op" "class"
+    "target-line" "target-col" "start-line" "end-line"
+    "start-col" "end-col" "new-text" "line-range" "byte-range"
+    "preview?" "dry-run?" "verify-load?" "rollback-on-load-fail?"
+    "skip-verify?" "allow-ns-spec-loss?" "allowed-new-edges"
+    "allowed-removed-edges" "allowed-missing-requires" "qns"
+    "target-alias" "remove-source-if-unused?"})
+
 (defn- hint [dropped]
   (str " Compact schema: only the shared parameters are listed here; each command"
        " also accepts its own (" dropped " more). command='help' lists the commands;"
@@ -37,15 +52,19 @@
 (defn compact-tool
   "TOOL with :schema reduced to CORE-SCHEMA's properties, open to further
    properties, and a description that says where the per-command ones live.
+   For code, keep carto edit properties visible to schema-bound MCP clients.
    TOOL unchanged when no core schema is known or nothing would be dropped."
-  [{:keys [schema description] :as tool} core-schema]
+  [{:keys [name schema description] :as tool} core-schema]
   (let [full-props (or (:properties schema) {})
         core-keys  (set (keys (:properties core-schema)))
-        dropped    (remove core-keys (keys full-props))]
+        visible    (if (= "code" name)
+                     (into core-keys code-edit-properties)
+                     core-keys)
+        dropped    (remove visible (keys full-props))]
     (if (or (nil? core-schema) (empty? dropped))
       tool
       (assoc tool
              :schema (assoc schema
-                            :properties (select-keys full-props core-keys)
+                            :properties (select-keys full-props visible)
                             :additionalProperties true)
              :description (str description (hint (count dropped)))))))

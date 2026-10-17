@@ -198,6 +198,7 @@ client's cwd, and the nREPL port is resolved in this order:
 |----------|-------------|---------|
 | `BB_MCP_RUNTIME` | `cljw` (ClojureWasm) or `bb` (babashka). cljw falls back to bb when no usable cljw is found. | `cljw` |
 | `BB_MCP_NREPL_PORT` | nREPL port of the hive-mcp backend | `<project>/.nrepl-port`, else 7910 |
+| `BB_MCP_HIVE_NREPL_PORT` | nREPL port the forwarded hive tools, tool loading and MCP resources dial. Never read from `.nrepl-port` or `BB_MCP_NREPL_PORT`, so a project's own REPL is not mistaken for the hive host | 7910 |
 | `BB_MCP_PROJECT_DIR` | Project directory (scopes tools; holds `.nrepl-port`) | the client's cwd |
 | `BB_MCP_TOOL_SCHEMA` | `compact` advertises each tool's core parameters and still accepts the rest (per-command params on demand via `command='carto describe' of='<cmd>'`); `full` advertises every tool parameter | `compact` |
 | `BB_MCP_NO_UPDATE_CHECK` | `1` turns off the startup release notice (see [Updates](#updates)) | off |
