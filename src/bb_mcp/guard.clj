@@ -100,9 +100,10 @@
        (fold (read-decision (:result res)))))))
 
 (defn denied?
-  "True when `decision` refuses the call."
+  "True when `decision` refuses the call: a :deny, or an :ask nothing granted
+   (the guard addon turns a granted ask into an :allow before it gets here)."
   [decision]
-  (= :deny (:guard/verdict decision)))
+  (contains? #{:deny :ask} (:guard/verdict decision)))
 
 (defn warned?
   "True when `decision` lets the call run but has something to say."

@@ -33,7 +33,7 @@
   (is (compact/compact? "compact")))
 
 (deftest compact-tool-keeps-core-drops-the-rest-and-stays-open
-  (let [t (compact/compact-tool full core)]
+  (let [t (compact/compact-tool (assoc full :name "other") core)]
     (testing "core properties survive, extension properties go"
       (is (= #{"command" "file"} (set (keys (get-in t [:schema :properties]))))))
     (testing "the schema stays open so the dropped parameters are still accepted"

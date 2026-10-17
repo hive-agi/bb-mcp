@@ -12,10 +12,16 @@
             [bb-mcp.piggyback :as piggyback]
             [bb-mcp.sense.receptor :as receptor]
             [bb-mcp.async :as async]
-            [bb-mcp.resources :as resources]))
+            [bb-mcp.resources :as resources]
+            [bb-mcp.inflight :as inflight]
+            [bb-mcp.tools.always-load :as always-load]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
+
+(def ^:private log-lock
+  "Calls answer from concurrent workers; one entry is appended at a time."
+  (Object.))
 
 (defn- log-tool-call
   "Append tool call request + response to log file for debugging."
@@ -33,7 +39,7 @@
                      " (" elapsed-ms "ms)\n"
                      "ARGS: " (hp/json-encode args) "\n"
                      "RESP: " (or truncated "<nil>") "\n\n")]
-      (spit log-file entry :append true))
+      (locking log-lock (spit log-file entry :append true)))
     (catch Exception _ nil)))
 
 ;; Agent context injection - auto-add agent_id from env var for attribution
@@ -179,9 +185,10 @@
   {:result :error?}.
 
   A call that outlives `*tool-ceiling-ms*` is ABANDONED rather than waited on:
-  the run-server loop is single-threaded, so one tool that never returns would
-  otherwise take every later request with it. The abandoned work carries on in
-  its own thread; only this server's attention is reclaimed."
+  each call holds one of run-server's bounded workers (and, on a runtime with
+  no pool, the read loop itself), so a tool that never returns would hold it
+  forever. The abandoned work carries on in its own thread; only this
+  server's attention is reclaimed."
   [t arguments]
   (let [work (future
                (try
@@ -287,7 +294,7 @@
 
 (defmethod handle-method "tools/list" [{:keys [id]}]
   (proto/tools-list-response
-   id (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec))))
+   id (always-load/marked (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec)))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
   (call-tool id (:name params) (:arguments params)))
@@ -358,8 +365,48 @@
                               (str "Internal error: " (.getName (class t))
                                    (when-let [m (ex-message t)] (str ": " m))))))))
 
+(def ^:private default-workers
+  "Concurrent `tools/call` workers. `BB_MCP_WORKERS` overrides it; 0 runs
+   every call inline on the read loop."
+  (or (some-> (System/getenv "BB_MCP_WORKERS") parse-long) 16))
+
+(def ^:private default-drain-ms
+  "How long input's end waits for in-flight calls to answer.
+   `BB_MCP_DRAIN_MS` overrides it."
+  (or (some-> (System/getenv "BB_MCP_DRAIN_MS") parse-long) 30000))
+
+(defn- call-failed
+  "The response for a `tools/call` whose worker threw past `call-tool`."
+  [id ^Throwable e]
+  (proto/json-rpc-error id -32603 (str "Internal error: "
+                                       (or (ex-message e) (.getName (class e))))))
+
+(defn- concurrent-call?
+  "True for a message answered from a worker rather than inline: a
+   `tools/call` REQUEST (it has an id). Everything else, the handshake,
+   `tools/list`, resources and every notification, stays inline and ordered."
+  [msg]
+  (and (= "tools/call" (:method msg)) (contains? msg :id)))
+
+(defn- cancelled-id
+  "The request id a `notifications/cancelled` names, or nil."
+  [msg]
+  (when (= "notifications/cancelled" (:method msg))
+    (get-in msg [:params :requestId])))
+
 (defn run-server
   "Read, dispatch, and write MCP messages over `transport` until input ends.
+
+   The loop only READS in order. Each `tools/call` runs on its own worker
+   from a bounded pool (`:workers`, default 16) and is answered from there,
+   so one slow tool no longer holds every later call behind it; responses
+   carry their request id, so out-of-order answers are valid JSON-RPC. The
+   handshake, `tools/list`, resources and notifications are handled inline,
+   in arrival order. A `notifications/cancelled` suppresses the named call's
+   response and interrupts its worker. When input ends, in-flight calls get
+   `:drain-ms` (default 30 s) to answer; the rest are abandoned unanswered.
+   `:workers 0`, or a runtime that cannot make threads, runs every call
+   inline, as before.
 
    The session's Receptor is chosen when `initialize` arrives (via
    `:select-receptor`, a fn of the initialize request; default: from that
@@ -367,21 +414,48 @@
    the first message AFTER it, i.e. once the handshake is done, so no channel
    event can precede the initialize result. It is disarmed when input ends.
    Every write, response or notification, goes through one serialised
-   transport. A request whose handling throws is answered with an error
-   (see `answer-safely`) and the loop reads the next message."
+   transport: one lock per whole message, never interleaved. A request
+   handled inline whose handling throws is answered with an error (see
+   `answer-safely`), and a worker call that throws with `call-failed`;
+   either way the loop reads the next message."
   ([] (run-server (proto/stdio-transport)))
   ([transport] (run-server transport {}))
-  ([transport {:keys [select-receptor] :or {select-receptor env-receptor}}]
-   (let [t (proto/serialized transport)]
+  ([transport {:keys [select-receptor workers drain-ms]
+               :or {select-receptor env-receptor
+                    workers default-workers
+                    drain-ms default-drain-ms}}]
+   (let [t    (proto/serialized transport)
+         p    (when (pos? workers) (inflight/pool workers))
+         send #(proto/write-msg t %)]
      (loop [r (receptor/null-receptor)]
        (if-let [msg (proto/read-msg t)]
          (let [initialize? (= "initialize" (:method msg))
-               r (if initialize? (open-session r select-receptor msg) r)]
-           (when-let [response (answer-safely (in-session r msg))]
-             (proto/write-msg t response))
+               r (if initialize? (open-session r select-receptor msg) r)
+               msg' (in-session r msg)]
+           (cond
+             (and p (concurrent-call? msg))
+             (inflight/submit! p (:id msg)
+                               #(handle-method msg')
+                               #(call-failed (:id msg) %)
+                               send)
+
+             (and p (some? (cancelled-id msg)))
+             (inflight/cancel! p (cancelled-id msg))
+
+             :else
+             (when-let [response (answer-safely msg')]
+               (send response)))
            (when-not initialize? (receptor/arm! r t))
            (recur r))
-         (receptor/disarm! r))))))
+         (do
+           (when p
+             (let [{:keys [abandoned]} (inflight/drain! p drain-ms)]
+               (when (seq abandoned)
+                 (binding [*out* *err*]
+                   (println (str "bb-mcp: input ended; abandoned " (count abandoned)
+                                 " call(s) still running after " drain-ms "ms: "
+                                 (pr-str abandoned)))))))
+           (receptor/disarm! r)))))))
 
 (defn- warn-unless-nrepl-reachable!
   "Print a startup hint to stderr when no nREPL answers on the resolved port.
@@ -438,7 +512,12 @@
   (warn-where-bash-runs!)
   (start-release-notice!)
   (hive/init!)
-  (run-server))
+  (run-server)
+  ;; Input has ended and the in-flight calls were drained (or abandoned).
+  ;; Exit explicitly: an abandoned worker or a tool's own thread must not
+  ;; keep this process alive after its client has gone (observed on cljw,
+  ;; whose runtime may not end while threads it started are still live).
+  (System/exit 0))
 
 ;; For REPL development
 (comment

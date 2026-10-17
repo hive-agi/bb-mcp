@@ -200,7 +200,7 @@
    the tool's core parameters (compact/compact-tool); forwarding is unchanged."
   [{:keys [name description schema deprecated core-schema]}]
   (let [base-schema (or schema {:type "object" :properties {} :required []})
-        advertised  (cond-> {:schema base-schema :description description}
+        advertised  (cond-> {:name name :schema base-schema :description description}
                       (compact/compact? (System/getenv "BB_MCP_TOOL_SCHEMA"))
                       (compact/compact-tool core-schema))
         [schema' rename] (sanitize-schema (:schema advertised))]
