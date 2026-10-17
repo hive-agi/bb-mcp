@@ -43,6 +43,61 @@
       (into scope-prefix argv)
       argv)))
 
+(defn resolve-executable
+  "The executable File `argv0` names for a child whose PATH is `path` and whose
+  working directory is `cwd` (nil: this process's), or nil when it does not
+  resolve. A name with a slash is a path (relative to cwd); a bare name is
+  looked up in the CHILD's PATH, which is what systemd-run searches. Mirrors
+  hive-mcp.system.child-scope/resolve-executable."
+  [argv0 path cwd]
+  (when-not (str/blank? argv0)
+    (let [cwd    (or cwd (System/getProperty "user.dir"))
+          exe?   (fn [^java.io.File f] (and (.isFile f) (.canExecute f)))
+          dir-of (fn [^String d]
+                   (let [f (java.io.File. (if (str/blank? d) "." d))]
+                     (if (.isAbsolute f) f (java.io.File. ^String cwd (.getPath f)))))]
+      (if (str/includes? argv0 "/")
+        (let [f (java.io.File. ^String argv0)
+              f (if (.isAbsolute f) f (java.io.File. ^String cwd ^String argv0))]
+          (when (exe? f) f))
+        (some (fn [d]
+                (let [f (java.io.File. ^java.io.File (dir-of d) ^String argv0)]
+                  (when (exe? f) f)))
+              (str/split (or path "") #":" -1))))))
+
+(defn plan-argv
+  "`prefix` (default `scope-prefix`) + argv when available? is exactly true and
+  argv's first element resolves for the child's PATH and cwd; argv unchanged
+  otherwise, so a missing command fails plain, as it always did. `bash`
+  always resolves; the check keeps this helper the same as hive-mcp's."
+  [available? argv {:keys [path cwd prefix]}]
+  (let [argv (vec argv)]
+    (if (and (true? available?) (seq argv) (resolve-executable (first argv) path cwd))
+      (into (vec (or prefix scope-prefix)) argv)
+      argv)))
+
+(def scope-failure-signatures
+  "How systemd-run's own failures begin on stderr, the ones where it exits 1
+  without running the command."
+  ["Failed to start transient scope unit"
+   "Failed to connect to bus"
+   "Failed to connect to user scope bus"
+   "Failed to create bus connection"])
+
+(defn scope-start-failure?
+  "True when a scoped run's result looks like systemd-run failing to set up the
+  scope rather than the command failing: exit 1, empty stdout, and stderr of at
+  most two lines starting with one of `scope-failure-signatures`. A run that
+  wrote anything to stdout ran the command and is never treated as one."
+  [{:keys [exit-code stdout stderr timed-out]}]
+  (let [text (str/trim (str stderr))]
+    (boolean
+     (and (not timed-out)
+          (= 1 exit-code)
+          (= "" (str stdout))
+          (<= 1 (count (str/split-lines text)) 2)
+          (some #(str/starts-with? text %) scope-failure-signatures)))))
+
 (defn argv-for
   "Apply `probe` to argv. A probe that throws or answers anything but true
   yields the plain argv."
@@ -72,6 +127,41 @@
   (let [answer (delay (try (true? (probe)) (catch Throwable _ false)))]
     (fn [] @answer)))
 
+(def default-ttl-ms
+  "How long `default-probe`'s answer stands before the next command re-probes."
+  (* 5 60 1000))
+
+(defn expiring-probe
+  "Wrap a probe so its answer is reused for `ttl-ms`, then probed again. With
+  one argument it RECORDS that answer as of now (a command that saw the scope
+  fail to start records false). A probe that throws answers false. opts:
+  :ttl-ms, :clock (0-arg fn, epoch ms)."
+  ([probe] (expiring-probe probe {}))
+  ([probe {:keys [ttl-ms clock] :or {ttl-ms default-ttl-ms}}]
+   (let [clock (or clock #(System/currentTimeMillis))
+         state (atom nil)]
+     (fn
+       ([]
+        (let [{:keys [answer at]} @state]
+          (if (and (some? at) (< (- (long (clock)) (long at)) (long ttl-ms)))
+            answer
+            (let [a (try (true? (probe)) (catch Throwable _ false))]
+              (reset! state {:answer a :at (clock)})
+              a))))
+       ([answer]
+        (reset! state {:answer (true? answer) :at (clock)})
+        (true? answer))))))
+
+(defn record-answer!
+  "Tell `probe` scoped spawns do or do not work as of now; a plain 0-arg probe
+  cannot record and is left alone."
+  [probe answer]
+  (try (probe answer) (catch Throwable _ nil))
+  nil)
+
 (def default-probe
-  "Process-wide probe: the real systemd-run check, run once."
-  (caching-probe systemd-probe))
+  "Process-wide probe: the real systemd-run check. Its answer stands for
+  `default-ttl-ms`; a command that sees the scope fail to start records false
+  on it. Not cached for the process's life: the user manager can go away
+  (daemon-reexec, user@ restart, a D-Bus timeout under memory pressure)."
+  (expiring-probe systemd-probe))
