@@ -1,0 +1,25 @@
+{:down
+ {:rows
+  [{:step "nrepl-port",
+    :status :fail,
+    :detail
+    "nothing answers on port 7910; start the hive-mcp backend, or export BB_MCP_NREPL_PORT=<port> if it listens elsewhere"}
+   {:step "jvm",
+    :status :fail,
+    :detail
+    "no process matches hive-mcp.server.core; the backend JVM is not running"}
+   {:step "config",
+    :status :fail,
+    :detail
+    "/h/c.edn is missing; create it (hive-mcp reads its providers and ports from there)"}],
+  :exit 1,
+  :out
+  "bb doctor\nnrepl-port  fail  nothing answers on port 7910; start the hive-mcp backend, or export BB_MCP_NREPL_PORT=<port> if it listens elsewhere\njvm         fail  no process matches hive-mcp.server.core; the backend JVM is not running\nconfig      fail  /h/c.edn is missing; create it (hive-mcp reads its providers and ports from there)"},
+ :healthy
+ {:rows
+  [{:step "nrepl-port", :status :ok, :detail "port 7910 answers"}
+   {:step "jvm", :status :ok, :detail "hive-mcp JVM running (pid 1)"}
+   {:step "config", :status :ok, :detail "/h/c.edn"}],
+  :exit 0,
+  :out
+  "bb doctor\nnrepl-port  ok  port 7910 answers\njvm         ok  hive-mcp JVM running (pid 1)\nconfig      ok  /h/c.edn"}}
