@@ -117,6 +117,56 @@
       (is (str/includes? (:stderr r) "No local fallback"))
       (is (str/includes? (:stderr r) "BB_MCP_RUNTIME=bb")))))
 
+(deftest resolve-nrepl-port-names-its-source
+  (let [no-env (constantly nil)
+        no-file (constantly nil)]
+    (testing "an explicit port wins over everything"
+      (is (= {:port 1234 :source :explicit-param}
+             (nrepl/resolve-nrepl-port 1234 {:getenv (constantly "7000")
+                                             :read-port-file (constantly 7932)}))))
+    (testing "BB_MCP_NREPL_PORT beats the .nrepl-port file"
+      (is (= {:port 7000 :source :env :env-var "BB_MCP_NREPL_PORT"}
+             (nrepl/resolve-nrepl-port nil {:getenv {"BB_MCP_NREPL_PORT" " 7000\n"}
+                                            :read-port-file (constantly 7932)}))))
+    (testing "the .nrepl-port file carries its path"
+      (let [asked (atom nil)]
+        (is (= {:port 7932 :source :nrepl-port-file :path "/proj/.nrepl-port"}
+               (nrepl/resolve-nrepl-port nil {:getenv no-env :project-dir "/proj"
+                                              :read-port-file (fn [p] (reset! asked p) 7932)})))
+        (is (= "/proj/.nrepl-port" @asked))))
+    (testing "nothing configured: hive-mcp's default"
+      (is (= {:port 7910 :source :default}
+             (nrepl/resolve-nrepl-port nil {:getenv no-env :project-dir "/proj"
+                                            :read-port-file no-file}))))
+    (testing "the default source reads without a redundant fallback clause"
+      (let [msg (remote/unreachable-message [7910] "refused" {:port 7910 :source :default})]
+        (is (str/includes? msg "port 7910 came from the built-in default"))
+        (is (not (str/includes? msg "then hive-mcp's default")))))))
+
+(deftest refused-error-says-where-the-port-came-from
+  (let [refuse (fn [{:keys [port]}]
+                 {:error? true :connect-failed? true
+                  :result (str "cljw.net: could not connect to 'localhost:" port "'")})]
+    (testing "a stale .nrepl-port is named by path, with the hive-build hint for 7932"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse
+                               :resolve-fn (constantly {:port 7932 :source :nrepl-port-file
+                                                        :path "/proj/.nrepl-port"})})]
+        (is (str/includes? (:stderr r) "port 7932 came from /proj/.nrepl-port"))
+        (is (str/includes? (:stderr r) "hive-build's deps.edn"))))
+    (testing "an env port is named by its variable, and no hive-build hint"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse
+                               :resolve-fn (constantly {:port 7000 :source :env
+                                                        :env-var "BB_MCP_NREPL_PORT"})})]
+        (is (str/includes? (:stderr r) "port 7000 came from the BB_MCP_NREPL_PORT env var"))
+        (is (not (str/includes? (:stderr r) "hive-build")))))
+    (testing "a bare-int :port-fn still works and keeps the generic wording"
+      (let [r (remote/execute {:command "git status"}
+                              {:eval-fn refuse :port-fn (constantly 7000)})]
+        (is (str/includes? (:stderr r) "localhost:7000, localhost:7910"))
+        (is (str/includes? (:stderr r) "resolved from BB_MCP_NREPL_PORT"))))))
+
 (deftest refused-port-falls-back-to-hive-mcp-port
   (testing "a stale resolved port refuses; hive-mcp's port answers and the command runs"
     (let [seen (atom [])

@@ -65,24 +65,40 @@
   (`bb-mcp.tools.hive.dynamic`). Tried after the resolved port refuses."
   7910)
 
+(def ^:private hive-build-nrepl-port
+  "The port of the `:nrepl` alias in hive/hive-build/deps.edn."
+  7932)
+
 (defn unreachable-message
   "Pure. The stderr text for a bash call no nREPL accepted.
 
-  `ports` are the ports tried, in order; `cause` the last transport message.
-  Names the owner of the port, how to start it, and why there is no local
-  fallback on this runtime."
-  [ports cause]
-  (str "bash runs in the hive-mcp JVM on this runtime, and it did not answer: "
-       cause "\n"
-       "Tried localhost:" (str/join ", localhost:" ports)
-       " (resolved from BB_MCP_NREPL_PORT, else <project>/.nrepl-port, "
-       "then hive-mcp's default " hive-mcp-port ").\n"
-       "Owner: the hive-mcp JVM nREPL, started by its own `hive-mcp` launcher, "
-       "never by bb-mcp. A project .nrepl-port that points at a stopped REPL "
-       "also lands here: remove it or set BB_MCP_NREPL_PORT to hive-mcp's port.\n"
-       "No local fallback: this bb-mcp runtime has no subprocess surface. "
-       "Start hive-mcp, or restart bb-mcp with BB_MCP_RUNTIME=bb to run bash "
-       "as a local subprocess."))
+  `ports` are the ports tried, in order; `cause` the last transport message;
+  `resolved` the first port's {:port :source ...} from
+  `nrepl/resolve-nrepl-port`, when known. Names where that port came from,
+  the owner of the port, how to start it, and why there is no local fallback
+  on this runtime."
+  ([ports cause] (unreachable-message ports cause nil))
+  ([ports cause resolved]
+   (let [origin (nrepl/describe-port-source resolved)]
+     (str "bash runs in the hive-mcp JVM on this runtime, and it did not answer: "
+          cause "\n"
+          "Tried localhost:" (str/join ", localhost:" ports)
+          (if origin
+            (str "; port " (:port resolved) " came from " origin
+                 (when (next ports)
+                   (str ", then hive-mcp's default " hive-mcp-port))
+                 ".\n")
+            (str " (resolved from BB_MCP_NREPL_PORT, else <project>/.nrepl-port, "
+                 "then hive-mcp's default " hive-mcp-port ").\n"))
+          (when (= hive-build-nrepl-port (:port resolved))
+            (str hive-build-nrepl-port " is the port of the :nrepl alias in "
+                 "hive-build's deps.edn, a build REPL, not hive-mcp.\n"))
+          "Owner: the hive-mcp JVM nREPL, started by its own `hive-mcp` launcher, "
+          "never by bb-mcp. A project .nrepl-port that points at a stopped REPL "
+          "also lands here: remove it or set BB_MCP_NREPL_PORT to hive-mcp's port.\n"
+          "No local fallback: this bb-mcp runtime has no subprocess surface. "
+          "Start hive-mcp, or restart bb-mcp with BB_MCP_RUNTIME=bb to run bash "
+          "as a local subprocess."))))
 
 (defn execute
   "Run `command` in the hive-mcp JVM and return `bb-mcp.tools.bash`'s shape.
@@ -94,13 +110,15 @@
    `:eval-fn` that carries a request to the JVM, so a test drives this with a
    stub instead of a live nREPL.
 
-   Port: `:port-fn` first, then hive-mcp's own port, the one the forwarded
-   tools use. The second port is tried only when the first refused the
-   CONNECTION (`:connect-failed?`), so a command is never sent twice."
+   Port: `:resolve-fn` answers {:port :source ...} (see
+   `nrepl/resolve-nrepl-port`); a bare-int `:port-fn` is still accepted and
+   carries no source. Then hive-mcp's own port, the one the forwarded tools
+   use. The second port is tried only when the first refused the CONNECTION
+   (`:connect-failed?`), so a command is never sent twice."
   ([args] (execute args {:eval-fn nrepl/eval-code
-                         :port-fn nrepl/get-nrepl-port}))
+                         :resolve-fn nrepl/resolve-nrepl-port}))
   ([{:keys [command working_directory timeout_ms _caller_cwd]}
-    {:keys [eval-fn port-fn fallback-port]
+    {:keys [eval-fn resolve-fn port-fn fallback-port]
      :or {fallback-port hive-mcp-port}}]
    (let [timeout (or timeout_ms 180000)
          dir (or working_directory _caller_cwd)
@@ -112,7 +130,8 @@
                             :code code
                             :timeout-ms (+ timeout nrepl-grace-ms)})
                   (catch Exception e {:error? true :result (ex-message e)})))
-         ports (distinct (remove nil? [(port-fn) fallback-port]))
+         resolved (if resolve-fn (resolve-fn) {:port (port-fn)})
+         ports (distinct (remove nil? [(:port resolved) fallback-port]))
          [res tried] (loop [[p & more] ports tried []]
                        (let [r (call p) tried' (conj tried p)]
                          (if (and (:connect-failed? r) (seq more))
@@ -120,7 +139,7 @@
                            [r tried'])))]
      (cond
        (:connect-failed? res)
-       (let [msg (unreachable-message tried (:result res))]
+       (let [msg (unreachable-message tried (:result res) resolved)]
          {:exit-code -1 :stdout "" :stderr msg :error (str (:result res))})
 
        (:error? res)

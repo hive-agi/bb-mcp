@@ -164,14 +164,61 @@ Examples:
   []
   (or (System/getenv "BB_MCP_PROJECT_DIR") "."))
 
+(def default-nrepl-port
+  "hive-mcp's own nREPL port."
+  7910)
+
+(def nrepl-port-env "BB_MCP_NREPL_PORT")
+
+(defn- slurp-port-file
+  "The port in the .nrepl-port file at `path`, or nil when there is none."
+  [path]
+  (let [f (java.io.File. ^String path)]
+    (when (.exists f)
+      (parse-long (str/trim (slurp f))))))
+
+(defn resolve-nrepl-port
+  "The nREPL port and where it came from: {:port n :source s ...}.
+
+   Order and :source:
+     explicit port param            :explicit-param
+     BB_MCP_NREPL_PORT env var      :env             (+ :env-var)
+     <project-dir>/.nrepl-port      :nrepl-port-file (+ :path)
+     hive-mcp's port 7910           :default
+
+   The 0-arity reads the real env and filesystem. The 2-arity takes them as
+   collaborators: :getenv (name -> string), :project-dir, :read-port-file
+   (path -> long or nil)."
+  ([] (resolve-nrepl-port nil {}))
+  ([explicit {:keys [getenv project-dir read-port-file]
+              :or {getenv #(System/getenv %)
+                   read-port-file slurp-port-file}}]
+   (let [dir (or project-dir (get-project-dir))
+         path (str dir "/.nrepl-port")]
+     (or (when explicit {:port explicit :source :explicit-param})
+         (when-let [p (some-> (getenv nrepl-port-env) str/trim parse-long)]
+           {:port p :source :env :env-var nrepl-port-env})
+         (when-let [p (read-port-file path)]
+           {:port p :source :nrepl-port-file :path path})
+         {:port default-nrepl-port :source :default}))))
+
+(defn describe-port-source
+  "Pure. Where a resolved port came from, as a phrase: \"/x/.nrepl-port\",
+   \"the BB_MCP_NREPL_PORT env var\", ... nil when the source is unknown."
+  [{:keys [source env-var path]}]
+  (case source
+    :explicit-param "the explicit port parameter"
+    :env (str "the " env-var " env var")
+    :nrepl-port-file path
+    :default "the built-in default (hive-mcp's nREPL)"
+    nil))
+
 (defn get-nrepl-port
-  "Get nREPL port from env, .nrepl-port file, or default.
-   Default is 7910 for hive-mcp nREPL."
+  "Get nREPL port from env, .nrepl-port file, or default, as a bare int.
+   Default is 7910 for hive-mcp nREPL. `resolve-nrepl-port` also says where
+   the port came from."
   []
-  (or (when-let [env-port (System/getenv "BB_MCP_NREPL_PORT")]
-        (parse-long env-port))
-      (find-nrepl-port (get-project-dir))
-      7910))
+  (:port (resolve-nrepl-port)))
 
 (defn execute
   "Execute Clojure code via nREPL."
