@@ -98,6 +98,43 @@
           (<= 1 (count (str/split-lines text)) 2)
           (some #(str/starts-with? text %) scope-failure-signatures)))))
 
+(def exec-trampoline
+  "bash script that runs first INSIDE the scope: it writes its first argument
+  (the per-call marker) and a newline to stderr, then execs the rest of its
+  argv. Seeing the marker proves systemd-run got as far as exec'ing the
+  command; its absence means the user command never started."
+  "printf '%s\\n' \"$1\" >&2; shift; exec \"$@\"")
+
+(defn new-marker
+  "A marker unique to one call."
+  []
+  (str "bb-mcp-scope-exec:" (java.util.UUID/randomUUID)))
+
+(defn exec-proof-argv
+  "argv that writes `marker` to stderr, then execs argv unchanged (each
+  element stays its own argument, so quoting, environment and exit code are
+  the command's own)."
+  [marker argv]
+  (into ["bash" "-c" exec-trampoline "bb-mcp-scope" marker] argv))
+
+(defn strip-marker
+  "[text marker-seen?]: stderr text with the first `marker` line removed, and
+  whether it was there."
+  [marker stderr]
+  (let [s (str stderr)]
+    (if-let [i (str/index-of s marker)]
+      (let [end (+ i (count marker))
+            end (if (and (< end (count s)) (= \newline (.charAt s end))) (inc end) end)]
+        [(str (subs s 0 i) (subs s end)) true])
+      [s false])))
+
+(defn retry-plain?
+  "True only when the marker never showed (the command did not start) AND the
+  result carries systemd-run's own failure signature. A run that showed the
+  marker is never retried, whatever its exit."
+  [marker-seen? result]
+  (and (not marker-seen?) (scope-start-failure? result)))
+
 (defn argv-for
   "Apply `probe` to argv. A probe that throws or answers anything but true
   yields the plain argv."

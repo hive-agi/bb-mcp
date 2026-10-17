@@ -49,7 +49,8 @@
   "Suites whose SUBJECT is a host primitive some runtime may not have. A
    runtime that cannot load one is told so by name — a suite that quietly
    vanishes is a falling assertion count, and that reads as green."
-  ['bb-mcp.tools.bash-test])
+  ['bb-mcp.tools.bash-test
+   'bb-mcp.tools.bash.scope-test])
 
 (defn- loadable
   "`ns-sym` when it loads on this runtime, else nil."
