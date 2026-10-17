@@ -40,12 +40,17 @@
                        :serverInfo {:name server-name
                                     :version server-version}})))
 
-(defn tools-list-response [id tools]
+(defn tools-list-response
+  "tools/list result. A spec with :always-load? true carries
+   `_meta {\"anthropic/alwaysLoad\" true}`, which tells a client with tool
+   search to send its schema up front instead of deferring it."
+  [id tools]
   (json-rpc-response id
-                     {:tools (mapv (fn [{:keys [name description schema]}]
-                                     {:name name
-                                      :description description
-                                      :inputSchema schema})
+                     {:tools (mapv (fn [{:keys [name description schema always-load?]}]
+                                     (cond-> {:name name
+                                              :description description
+                                              :inputSchema schema}
+                                       always-load? (assoc :_meta {"anthropic/alwaysLoad" true})))
                                    tools)}))
 
 (defn tool-call-response [id result is-error?]

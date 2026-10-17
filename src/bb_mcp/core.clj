@@ -13,7 +13,8 @@
             [bb-mcp.sense.receptor :as receptor]
             [bb-mcp.async :as async]
             [bb-mcp.resources :as resources]
-            [bb-mcp.inflight :as inflight]))
+            [bb-mcp.inflight :as inflight]
+            [bb-mcp.tools.always-load :as always-load]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -293,7 +294,7 @@
 
 (defmethod handle-method "tools/list" [{:keys [id]}]
   (proto/tools-list-response
-   id (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec))))
+   id (always-load/marked (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec)))))
 
 (defmethod handle-method "tools/call" [{:keys [id params]}]
   (call-tool id (:name params) (:arguments params)))
