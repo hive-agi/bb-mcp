@@ -13,6 +13,9 @@
   doctor {:doc "Read-only check of the hive-mcp backend: nREPL port, JVM process, config file"
           :task (exec 'bb-mcp.doctor/-main)}
 
+  up {:doc "Start the hive-mcp backend only when the nREPL port is free (--dir <checkout>, --dry-run)"
+      :task (apply (requiring-resolve 'bb-mcp.doctor/up-main) *command-line-args*)}
+
   test {:doc "Run tests"
         :task (do (shell "bb --config bb.edn -m bb-mcp.test-runner")
                   (shell "bb --config bb.edn -m bb-mcp.setup.suite"))}}}
