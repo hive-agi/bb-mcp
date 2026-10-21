@@ -66,10 +66,13 @@
      tool - the tool name as this head serves it, e.g. \"bash\".
      args - the tool's arguments after context injection; only the caller
             identity keys are sent.
+     opts - :eval-fn, :port-fn, :timeout-ms. The port defaults to the
+            hive-mcp host's (`nrepl/hive-port`), never a project's
+            .nrepl-port: the blocks live in the hive JVM.
    Total: never nil, never throws."
-  ([tool args] (drain tool args {:eval-fn nrepl/eval-code
-                                 :port-fn nrepl/get-nrepl-port}))
-  ([tool args {:keys [eval-fn port-fn timeout-ms]}]
+  ([tool args] (drain tool args {}))
+  ([tool args {:keys [eval-fn port-fn timeout-ms]
+               :or {eval-fn nrepl/eval-code port-fn nrepl/hive-port}}]
    (try
      (let [res (eval-fn {:port (port-fn)
                          :code (drain-form tool (select-keys args identity-keys))

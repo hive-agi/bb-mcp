@@ -40,9 +40,27 @@ export BB_MCP_CALLER_CWD="${BB_MCP_CALLER_CWD:-$PWD}"
 PROJECT_DIR="${1:-${BB_MCP_PROJECT_DIR:-$(pwd)}}"
 NREPL_PORT="${2:-${BB_MCP_NREPL_PORT:-}}"
 
+# True when something accepts a TCP connection on 127.0.0.1:$1 within a second.
+port_answers() {
+    [[ "$1" =~ ^[0-9]+$ ]] || return 1
+    timeout 1 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null
+}
+
 # Auto-detect nREPL port if not provided
+PORT_FILE=""
 if [[ -z "$NREPL_PORT" ]] && [[ -f "$PROJECT_DIR/.nrepl-port" ]]; then
-    NREPL_PORT=$(cat "$PROJECT_DIR/.nrepl-port")
+    PORT_FILE="$PROJECT_DIR/.nrepl-port"
+    NREPL_PORT=$(tr -d '[:space:]' < "$PORT_FILE")
+fi
+
+# A .nrepl-port outlives the REPL that wrote it. Say so at startup instead of
+# letting the first clojure_eval without a port fail against a dead port. Hive
+# tools, the guard, piggyback and the sense receptor are unaffected: they dial
+# the hive-mcp host (BB_MCP_HIVE_NREPL_PORT, else 7910).
+if [[ -n "$PORT_FILE" ]] && ! port_answers "$NREPL_PORT"; then
+    echo "start-bb-mcp.sh: warning: $PORT_FILE names nREPL port $NREPL_PORT, which does not answer;" \
+         "clojure_eval without a port will fail there. Hive tools use the hive-mcp port" \
+         "(${BB_MCP_HIVE_NREPL_PORT:-7910})." >&2
 fi
 
 export BB_MCP_PROJECT_DIR="$PROJECT_DIR"

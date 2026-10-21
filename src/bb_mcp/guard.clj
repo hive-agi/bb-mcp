@@ -83,13 +83,16 @@
    Arguments:
      tool — the tool name as this head serves it, e.g. \"bash\".
      args — the tool's arguments, after context injection.
+     opts — :eval-fn, :port-fn, :timeout-ms. The port defaults to the
+            hive-mcp host's (`nrepl/hive-port`), never a project's
+            .nrepl-port: the guard lives in the hive JVM.
    Returns: a decision map. Read `:guard/verdict`; when it is `:deny` or
             `:warn`, `:guard/reason`, `:guard/rule-id` and `:guard/citations`
             carry the rest.
    Total: never nil, never throws."
-  ([tool args] (decide tool args {:eval-fn nrepl/eval-code
-                                  :port-fn nrepl/get-nrepl-port}))
-  ([tool args {:keys [eval-fn port-fn timeout-ms]}]
+  ([tool args] (decide tool args {}))
+  ([tool args {:keys [eval-fn port-fn timeout-ms]
+               :or {eval-fn nrepl/eval-code port-fn nrepl/hive-port}}]
    (let [res (try
                (eval-fn {:port (port-fn)
                          :code (decide-form (->payload tool args))
