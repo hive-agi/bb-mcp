@@ -20,7 +20,8 @@
             [bb-mcp.resources-policy-test]
             [bb-mcp.concurrent-test]
             [bb-mcp.tools.always-load-test]
-            [bb-mcp.tools.nrepl-test]))
+            [bb-mcp.tools.nrepl-test]
+            [bb-mcp.hive-port-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -40,6 +41,7 @@
    'bb-mcp.guard-test
    'bb-mcp.piggyback-test
    'bb-mcp.sense-test
+   'bb-mcp.hive-port-test
    'bb-mcp.tools.bash.remote-test
    'bb-mcp.async-test
    'bb-mcp.resources-test
@@ -50,7 +52,8 @@
    runtime that cannot load one is told so by name — a suite that quietly
    vanishes is a falling assertion count, and that reads as green."
   ['bb-mcp.tools.bash-test
-   'bb-mcp.tools.bash.scope-test])
+   'bb-mcp.tools.bash.scope-test
+   'bb-mcp.start-script-test])
 
 (defn- loadable
   "`ns-sym` when it loads on this runtime, else nil."
