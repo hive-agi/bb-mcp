@@ -162,8 +162,13 @@
           ;; 3. Raw vector: [{:type "text" :text "..."} ...] — from handlers without middleware
           ;; All text blocks are concatenated to preserve multi-block responses (e.g. catchup).
           code (pr-str
-                `(let [ctx# @(deref (resolve '~'hive-mcp.server.core/server-context-atom))
+                `(let [;; requiring-resolve, not resolve: a failed host reload can
+                       ;; leave this namespace unloaded, and resolve would answer nil.
+                       ctx-var# (requiring-resolve '~'hive-mcp.server.core/server-context-atom)
+                       ctx# (some-> ctx-var# deref deref)
+                       _# (when-not ctx# (throw (ex-info "hive-mcp server context is not loaded" {:tool ~tool-name})))
                        handler# (get-in @(:tools ctx#) [~tool-name :handler])
+                       _# (when-not handler# (throw (ex-info (str "hive-mcp has no handler for tool " ~tool-name) {:tool ~tool-name})))
                        result# (handler# ~hive-args)
                        texts# (cond
                                 ;; Wrapped format: {:content [{:type "text" :text "..."}]}
