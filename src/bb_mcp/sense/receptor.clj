@@ -45,10 +45,11 @@
    through hive-agent's per-consumer port when `opts` names a :consumer and
    the hive has it, else with the stateless `hive-agent.sixth-sense.api/drain`.
    `opts` may carry :consumer, :limit and :prime? (`sense/feed-spec`), and
-   :eval-fn and :port-fn (defaults: the shared nREPL client)."
+   :eval-fn and :port-fn (defaults: the shared nREPL client, dialling the
+   hive-mcp host's port `nrepl/hive-port`, never a project's .nrepl-port)."
   ([] (nrepl-feed {}))
   ([{:keys [eval-fn port-fn timeout-ms]
-     :or {eval-fn nrepl/eval-code port-fn nrepl/get-nrepl-port
+     :or {eval-fn nrepl/eval-code port-fn nrepl/hive-port
           timeout-ms drain-timeout-ms}
      :as opts}]
    (let [spec (select-keys opts [:consumer :limit :prime?])]
