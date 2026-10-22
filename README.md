@@ -46,10 +46,25 @@ read the ratios rather than the exact times:
 | `clojure_eval` returning ~110KB | **44-92ms** | 70-163ms |
 
 Per-call time is dominated by the nREPL round trip and hive-mcp itself, so the
-two runtimes feel the same in use. Memory is where they differ: ten clients
-cost ~0.5GB of cljw heads against ~1.3GB of bb heads, on top of the one shared
-JVM. A long-lived head can sit higher after large payloads (one serving a busy
-session for 3 hours measured 283MB on cljw).
+two runtimes feel the same in use. Memory is where they differ, and the RSS
+column overstates bb's cost for a fleet:
+
+| Fresh head | cljw | bb |
+|------------|------|----|
+| Binary | 9.4MB | 90.5MB |
+| Runtime alone (`-e nil`), peak RSS | 13.7MB | 63.2MB |
+| Private (anonymous) memory | ~46MB | ~75MB |
+| File-backed, shared by every process of that binary | ~1MB | ~51MB |
+
+bb is a GraalVM native image: its binary carries a pre-built heap of every
+bundled namespace, and about 51MB of it is mapped from the file and shared
+between bb heads. cljw's binary is code only and its runtime loads into a
+compact private heap. So ten fresh heads cost ~0.5GB on cljw against ~0.8GB on
+bb (10 × 75MB + 51MB once), on top of the one shared JVM.
+
+cljw's memory is nearly all private and grows with traffic: four long-lived
+cljw heads measured 32, 68, 88 and 219MB of private memory, the largest after
+3 hours of a busy session. The saving is largest for many short-lived heads.
 
 ### Use Case: Claude Swarm
 
