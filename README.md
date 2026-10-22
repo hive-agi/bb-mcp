@@ -9,7 +9,10 @@
 
 <!-- /hive-badges -->
 
-Lightweight MCP (Model Context Protocol) server in Babashka that bridges Claude Code to Emacs via nREPL.
+Lightweight MCP (Model Context Protocol) server that bridges Claude Code and
+Codex to the hive-mcp JVM over nREPL. It runs on
+[ClojureWasm](https://github.com/clojurewasm/ClojureWasm) (`cljw`, the
+default) or on [Babashka](https://babashka.org/) (`bb`), from the same source.
 
 ## OpenClaw ACP
 
@@ -24,30 +27,54 @@ inventing a second ACP wire format.
 
 **The Problem:** Running multiple Claude Code instances (e.g., swarm agents) each with their own JVM-based MCP server consumes massive resources.
 
-**The Solution:** bb-mcp is a lightweight **multiplexer** - many Babashka instances share ONE JVM.
-
-| Scenario | Without bb-mcp | With bb-mcp |
-|----------|----------------|-------------|
-| 1 Claude | ~500MB | ~550MB (50MB bb + 500MB JVM) |
-| 3 Claudes | ~1.5GB (3 JVMs) | **~650MB** (3 bb + 1 JVM) |
-| 5 Claudes | ~2.5GB (5 JVMs) | **~750MB** (5 bb + 1 JVM) |
-| 10 Claudes | ~5GB (10 JVMs) | **~1GB** (10 bb + 1 JVM) |
+**The Solution:** bb-mcp is a lightweight **multiplexer**: every client gets a
+small bb-mcp head, and all heads share ONE hive-mcp JVM. With N clients you pay
+for one JVM plus N heads instead of N JVMs.
 
 ### Key Metrics
 
-| Metric | JVM hive-mcp | bb-mcp |
-|--------|---------------|--------|
-| Startup | ~2-3s | **~5ms** |
-| Memory | ~500MB | **~50MB** |
-| Scales to | 1 instance | **Many instances** |
+One head, measured 2026-10-22 on Linux x86_64 (cljw v1.15.3, babashka
+v1.13.224), three runs each against a running hive-mcp, on a loaded host, so
+read the ratios rather than the exact times:
+
+| Per head | cljw (default) | bb |
+|----------|----------------|----|
+| Peak memory (RSS) | **~54MB** | ~129MB |
+| Process start to `initialize` reply (connects to hive-mcp, loads its tools) | 164-506ms, median 288ms | 320-383ms, median 370ms |
+| `tools/list` (73KB of JSON) | 9-16ms | **4ms** |
+| `clojure_eval` `(+ 1 2)` round trip, median | 37-59ms | 39-47ms |
+| `clojure_eval` returning ~110KB | **44-92ms** | 70-163ms |
+
+Per-call time is dominated by the nREPL round trip and hive-mcp itself, so the
+two runtimes feel the same in use. Memory is where they differ, and the RSS
+column overstates bb's cost for a fleet:
+
+| Fresh head | cljw | bb |
+|------------|------|----|
+| Binary | 9.4MB | 90.5MB |
+| Runtime alone (`-e nil`), peak RSS | 13.7MB | 63.2MB |
+| Private (anonymous) memory | ~46MB | ~75MB |
+| File-backed, shared by every process of that binary | ~1MB | ~51MB |
+
+bb is a GraalVM native image: its binary carries a pre-built heap of every
+bundled namespace, and about 51MB of it is mapped from the file and shared
+between bb heads. cljw's binary is code only and its runtime loads into a
+compact private heap. So ten fresh heads cost ~0.5GB on cljw against ~0.8GB on
+bb (10 × 75MB + 51MB once), on top of the one shared JVM.
+
+cljw's memory is nearly all private and grows with traffic: four long-lived
+cljw heads measured 32, 68, 88 and 219MB of private memory, the largest after
+3 hours of a busy session. The saving is largest for many short-lived heads.
 
 ### Use Case: Claude Swarm
 
-When running swarm agents (multiple Claudes working in parallel), each agent needs an MCP connection to Emacs. Without bb-mcp, you'd need separate JVM processes. With bb-mcp:
+When running swarm agents (multiple Claudes working in parallel), each agent
+needs an MCP connection to hive. Without bb-mcp, you'd need a JVM per agent.
+With bb-mcp:
 
-- **1 hive-mcp** (JVM) handles Emacs integration
-- **N bb-mcp** instances (Babashka) multiplex to it
-- All agents share tools, memory, kanban, git via the single JVM
+- **1 hive-mcp** (JVM) serves memory, kanban, swarm, git and the Emacs integration
+- **N bb-mcp** heads (cljw by default, or bb) multiplex to it
+- All agents share tools, memory, kanban and git through the single JVM
 
 ## Architecture
 
@@ -62,20 +89,50 @@ When running swarm agents (multiple Claudes working in parallel), each agent nee
                     ┌──────────────┐  │     └────────┬────────┘
   Claude 3 ───────▶ │   bb-mcp     │──┘              │
                     └──────────────┘                 ▼
-                       ~50MB each              ┌─────────────┐
+                   ~54MB each (cljw)           ┌─────────────┐
                                                │    Emacs    │
                                                └─────────────┘
 ```
 
 **Data Flow:**
 1. Claude Code connects to bb-mcp via MCP protocol (stdio)
-2. bb-mcp handles native tools directly (bash, grep, file ops)
-3. Emacs-related tools delegate to hive-mcp via nREPL on port 7910
-4. hive-mcp executes elisp in Emacs via emacsclient
+2. bb-mcp serves its native tools itself: `bash` and `clojure_eval` (on cljw,
+   `bash` runs inside hive-mcp; see [Runtimes](#runtimes-cljw-and-bb))
+3. Every other tool is forwarded to hive-mcp via nREPL on port 7910
+4. hive-mcp executes elisp in Emacs via emacsclient where a tool needs it
+
+## Runtimes: cljw and bb
+
+`start-bb-mcp.sh` picks the runtime from `BB_MCP_RUNTIME`, `cljw` by default:
+
+1. It looks for a cljw binary in `CLJW_BIN`, then config.edn
+   `:runtimes :cljw :binary`, then every `cljw` on PATH, and takes the first one
+   that provides `cljw.net/connect` (the TCP client the nREPL connection uses).
+2. It runs `cljw -cp src -m bb-mcp.core`.
+3. With no usable cljw it falls back to `bb -m bb-mcp.core`, unless you asked
+   for cljw explicitly via `CLJW_BIN` or babashka is missing (then it exits 3).
+
+Install cljw with `brew install clojurewasm/tap/cljw`, or take a release
+tarball from [ClojureWasm releases](https://github.com/BuddhiLW/ClojureWasm/releases)
+(each one ships `SHA256SUMS` and a signed build attestation). v1.15.3 is the
+version measured above.
+
+What differs on cljw:
+
+| | cljw | bb |
+|---|---|---|
+| nREPL socket | `cljw.net/connect` | `java.net.Socket` |
+| JSON | cljw's `clojure.data.json` | cheshire |
+| `bash` tool | runs **inside hive-mcp**: cljw has no subprocess, so the command goes over the nREPL socket the head already holds. `tools/list` is the same on both, but on cljw `bash` needs the backend up. | runs locally in the head |
+| Release notice | a detached `bb bb-mcp notice` beside the server (it needs `git ls-remote`) | in process |
+| `bb-mcp setup`, `bb test`, `bb doctor` | run on bb | run on bb |
+
+So babashka stays a prerequisite even when every head runs on cljw.
 
 ## Prerequisites
 
-- [Babashka](https://babashka.org/) v1.3+ (required: `bb-mcp setup` and the `bb` runtime)
+- [ClojureWasm](https://github.com/clojurewasm/ClojureWasm) (`cljw`), the default runtime (see [Runtimes](#runtimes-cljw-and-bb))
+- [Babashka](https://babashka.org/) v1.3+ (required: `bb-mcp setup`, the release notice, tests, and the `bb` runtime)
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (for the grep tool)
 - [hive-mcp](https://github.com/hive-agi/hive-mcp), the JVM backend bb-mcp talks to, serving nREPL (default port 7910)
 
@@ -249,39 +306,27 @@ cursor that went backwards).
 
 ## Tools
 
-bb-mcp provides **114 tools** (6 native + 108 from hive-mcp).
+bb-mcp serves two native tools and forwards everything else hive-mcp exposes.
+hive-mcp's tools are consolidated, one tool per domain with a `command`
+parameter, so the list is short: against hive-mcp on 2026-10-22, `tools/list`
+returned 11.
 
-### Native Tools (6)
+### Native Tools (2)
 
-Fast tools that run directly in Babashka without JVM:
+Served by the head itself:
 
 | Tool | Description |
 |------|-------------|
-| `bash` | Execute shell commands |
-| `read_file` | Read file contents |
-| `file_write` | Write files to disk |
-| `glob_files` | Find files by glob pattern |
-| `grep` | Search content with ripgrep |
-| `clojure_eval` | Evaluate Clojure via nREPL |
+| `bash` | Execute shell commands. Local on bb; on cljw it runs inside hive-mcp (cljw has no subprocess) |
+| `clojure_eval` | Evaluate Clojure on an nREPL: hive-mcp's by default, or any `port` |
 
-### Emacs Tools (108 dynamic)
+### hive-mcp Tools (dynamic)
 
-Tools loaded dynamically from hive-mcp at startup:
-
-| Domain | Tools | Description |
-|--------|-------|-------------|
-| **Buffer** | 19 | Buffer ops, elisp eval, file navigation |
-| **Memory** | 17 | Project memory CRUD with TTL, semantic search |
-| **Swarm** | 14 | Claude swarm orchestration, hivemind |
-| **CIDER** | 12 | Clojure REPL, docs, completions |
-| **Magit** | 10 | Git operations via Magit |
-| **Kanban** | 8 | Task/kanban management |
-| **Projectile** | 6 | Project navigation |
-| **Org** | 6 | Org-mode operations, native kanban |
-| **Prompt** | 5 | Prompt capture, search, analysis |
-| **Channel** | 4 | Emacs event channels |
-| **Hivemind** | 4 | Multi-agent communication |
-| **Context** | 1 | Full context aggregation |
+Loaded from hive-mcp at startup. On 2026-10-22: `bb-mcp`, `code` (carto
+navigation and structural editing, CIDER, analysis), `memory` (memory, the
+knowledge graph, ingestion), `swarm` (lings, hivemind, sixth-sense), `project`
+(kanban, workflows, transcripts), `git` (status, commits, ship), `fs`, `web`
+and `multi` (batched calls). Each one lists its commands with `command='help'`.
 
 ### Dynamic Tool Loading
 
@@ -297,11 +342,14 @@ MCP clients run `~/.local/share/hive-mcp/bb-mcp/start-bb-mcp.sh` (see
 Installation). By hand, from the checkout:
 
 ```bash
-# Via bb task
-bb mcp
+# The launcher clients use (cljw, falling back to bb)
+./start-bb-mcp.sh
 
-# Directly
-bb -m bb-mcp.core
+# On cljw directly
+cljw -cp src -m bb-mcp.core
+
+# On bb
+bb mcp            # or: bb -m bb-mcp.core
 ```
 
 ## Project Structure
