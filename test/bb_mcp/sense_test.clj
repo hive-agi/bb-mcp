@@ -22,6 +22,12 @@
   {:sense/id "s-2" :sense/class :sense/completed :sense/agent "ling-8"
    :sense/project "hive-agent" :sense/text "ling-8 completed" :sense/at "2026-09-26T23:00:00Z"})
 
+(defn- without-instructions
+  "An initialize response without its tool route map, which depends on the
+   tools registered in this process and is tested in route-map-test."
+  [resp]
+  (update resp :result dissoc :instructions))
+
 (defn- recording-transport
   "A Transport that records every written message in `outbox`."
   [outbox]
@@ -120,7 +126,7 @@
               (read-msg [_] (when-let [m (first @inbox)] (swap! inbox rest) m))
               (write-msg [_ m] (swap! outbox conj m)))]
       (core/run-server t {:select-receptor (constantly r)})
-      (is (= [(proto/initialize-response 1 sense/channel-capability)] @outbox))
+      (is (= [(proto/initialize-response 1 sense/channel-capability)] (mapv without-instructions @outbox)))
       (is (= [[:arm 1] :disarm] @events)
           "armed once the initialize result is out, disarmed at end of input")))
   (testing "select-receptor is handed the initialize request itself"
@@ -155,15 +161,16 @@
         "the first poller is stopped before the second session's is chosen")
     (is (= [(proto/initialize-response 1 sense/channel-capability)
             (proto/initialize-response 2 sense/channel-capability)]
-           @outbox))))
+           (mapv without-instructions @outbox)))))
 
 (deftest initialize-has-one-source
   (testing "handle-method answers initialize from the session capabilities it is given"
     (is (= (proto/initialize-response 4)
-           (core/handle-method {:method "initialize" :id 4})))
+           (without-instructions (core/handle-method {:method "initialize" :id 4}))))
     (is (= (proto/initialize-response 4 sense/channel-capability)
-           (core/handle-method {:method "initialize" :id 4
-                                :session/capabilities sense/channel-capability})))))
+           (without-instructions
+            (core/handle-method {:method "initialize" :id 4
+                                 :session/capabilities sense/channel-capability}))))))
 
 ;;; ===========================================================================
 ;;; Pure: sense -> notification

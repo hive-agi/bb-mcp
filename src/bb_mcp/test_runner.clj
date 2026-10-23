@@ -21,7 +21,8 @@
             [bb-mcp.concurrent-test]
             [bb-mcp.tools.always-load-test]
             [bb-mcp.tools.nrepl-test]
-            [bb-mcp.hive-port-test]))
+            [bb-mcp.hive-port-test]
+            [bb-mcp.tools.route-map-test]))
 
 (def ^:private portable-suites
   "Suites every runtime must run. Nothing here names a host primitive."
@@ -30,6 +31,7 @@
    'bb-mcp.tools.dynamic-test
    'bb-mcp.tools.hive.compact-test
    'bb-mcp.tools.always-load-test
+   'bb-mcp.tools.route-map-test
    'bb-mcp.tools.nrepl-test
    'bb-mcp.wire.bencode-test
    'bb-mcp.wire.bencode-props-test
