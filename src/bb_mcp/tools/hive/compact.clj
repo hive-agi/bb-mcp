@@ -43,11 +43,16 @@
     "allowed-removed-edges" "allowed-missing-requires" "qns"
     "target-alias" "remove-source-if-unused?"})
 
-(defn- hint [dropped]
+(defn- hint
+  "The description suffix for a compacted tool NAME that dropped DROPPED
+   parameters. Only `code` carries carto commands, so only its hint names
+   `carto describe`."
+  [name dropped]
   (str " Compact schema: only the shared parameters are listed here; each command"
-       " also accepts its own (" dropped " more). command='help' lists the commands;"
-       " for a carto command, command='carto describe' of='<command>' returns its"
-       " :params."))
+       " also accepts its own (" dropped " more). command='help' lists the commands"
+       (if (= "code" name)
+         "; for a carto command, command='carto describe' of='<command>' returns its :params."
+         ".")))
 
 (defn compact-tool
   "TOOL with :schema reduced to CORE-SCHEMA's properties, open to further
@@ -67,4 +72,4 @@
              :schema (assoc schema
                             :properties (select-keys full-props visible)
                             :additionalProperties true)
-             :description (str description (hint (count dropped)))))))
+             :description (str description (hint name (count dropped)))))))

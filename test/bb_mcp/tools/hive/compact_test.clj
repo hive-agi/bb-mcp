@@ -42,11 +42,15 @@
       (is (= ["command"] (get-in t [:schema :required])))
       (is (= "object" (get-in t [:schema :type]))))
     (testing "the description says how many were dropped and where to find them"
-      (is (re-find #"\(2 more\)" (:description t)))
-      (is (re-find #"command='help'" (:description t)))
-      (is (re-find #"command='carto describe' of='<command>' returns its :params"
-                   (:description t)))
-      (is (.startsWith ^String (:description t) "Code intelligence.")))))
+      (is (.contains ^String (:description t) "(2 more)"))
+      (is (.contains ^String (:description t) "command='help'"))
+      (is (.startsWith ^String (:description t) "Code intelligence.")))
+    (testing "only the code tool's hint names carto describe"
+      (is (not (.contains ^String (:description t) "carto")))
+      (is (.contains ^String (:description (compact/compact-tool
+                                            (assoc-in full [:schema :properties "limit"] {:type "integer"})
+                                            core))
+                     "command='carto describe' of='<command>' returns its :params")))))
 
 (deftest compact-tool-is-identity-when-nothing-would-change
   (testing "no core schema known"
