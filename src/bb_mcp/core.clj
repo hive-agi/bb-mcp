@@ -14,7 +14,8 @@
             [bb-mcp.async :as async]
             [bb-mcp.resources :as resources]
             [bb-mcp.inflight :as inflight]
-            [bb-mcp.tools.always-load :as always-load]))
+            [bb-mcp.tools.always-load :as always-load]
+            [bb-mcp.tools.route-map :as route-map]))
 
 ;; Tool call logging — tail -f /tmp/bb-mcp.log to see MCP traffic
 (def ^:private log-file (str "/tmp/bb-mcp-" (System/getProperty "user.name") ".log"))
@@ -287,7 +288,8 @@
   ;; THE initialize response. `:session/capabilities` is what this session's
   ;; receptor adds (run-server attaches it); absent, the base set alone.
   [{:keys [id] :session/keys [capabilities]}]
-  (proto/initialize-response id (or capabilities {})))
+  (proto/initialize-response id (or capabilities {})
+                             (route-map/from-env (->> (get-tools) (remove tool/deprecated?) (map tool/tool-spec)))))
 
 (defmethod handle-method "initialized" [_]
   nil) ;; Notification, no response

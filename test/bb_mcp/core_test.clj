@@ -145,9 +145,11 @@
                        (let [m (first @inbox)] (swap! inbox rest) m)))
                    (write-msg [_ m] (swap! outbox conj m)))]
       (core/run-server t {:select-receptor (fn [_init] (receptor/null-receptor))})
-      (is (= [(proto/initialize-response 1)
-              (proto/json-rpc-response 2 {:prompts []})]
-             @outbox)))))
+      (let [[init prompts :as sent] @outbox]
+        (is (= 2 (count sent)))
+        (is (= (proto/initialize-response 1) (update init :result dissoc :instructions)))
+        (is (string? (get-in init [:result :instructions])) "the tool route map rides on initialize")
+        (is (= (proto/json-rpc-response 2 {:prompts []}) prompts))))))
 
 (defn- run-messages
   "Drive run-server over `msgs` in memory; the responses it wrote."

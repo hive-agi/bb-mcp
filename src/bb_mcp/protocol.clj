@@ -31,14 +31,17 @@
 
 (defn initialize-response
   "The initialize result. `extra-capabilities` (e.g. a receptor's
-   {:experimental {\"claude/channel\" {}}}) is merged over the base set."
+   {:experimental {\"claude/channel\" {}}}) is merged over the base set;
+   `instructions`, when given, is the server instructions text."
   ([id] (initialize-response id {}))
-  ([id extra-capabilities]
+  ([id extra-capabilities] (initialize-response id extra-capabilities nil))
+  ([id extra-capabilities instructions]
    (json-rpc-response id
-                      {:protocolVersion protocol-version
-                       :capabilities (merge-with merge base-capabilities extra-capabilities)
-                       :serverInfo {:name server-name
-                                    :version server-version}})))
+                      (cond-> {:protocolVersion protocol-version
+                               :capabilities (merge-with merge base-capabilities extra-capabilities)
+                               :serverInfo {:name server-name
+                                            :version server-version}}
+                        instructions (assoc :instructions instructions)))))
 
 (defn tools-list-response
   "tools/list result. A spec with :always-load? true carries
