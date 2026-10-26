@@ -132,3 +132,22 @@
         (core/handle-method {:method "tools/call" :id 1
                              :params {:name "project" :arguments {:async true}}})
         (is (true? (:async @seen)))))))
+
+(deftest the-guard-judges-an-async-call-as-made
+  (testing "async is stripped for the tool, but the guard must see it (friction 20261023190623-74f0be6e)"
+    (let [seen-guard (atom nil)
+          seen-tool  (atom nil)
+          release    (promise)]
+      (with-redefs [core/get-tools         (constantly [(tool/native-tool {:name "bash"}
+                                                                          (fn [a] (reset! seen-tool a)
+                                                                            (deliver release true)
+                                                                            {:result "ok" :error? false}))])
+                    core/native-tool-names #{"bash"}
+                    guard/decide           (fn [_ args] (reset! seen-guard args) {:guard/verdict :allow})]
+        (binding [core/*drain-fn* (constantly "")]
+          (core/handle-method {:method "tools/call" :id 1
+                               :params {:name "bash" :arguments {:command "true" :timeout_ms 960000 :async true}}})
+          (deref release 5000 nil)
+          (is (true? (:async @seen-guard)))
+          (is (= 960000 (:timeout_ms @seen-guard)))
+          (is (not (contains? @seen-tool :async))))))))
