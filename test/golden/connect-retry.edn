@@ -1,0 +1,4 @@
+{:down {:result :refused, :calls 3, :sleeps [250 1000]},
+ :refused-once {:result :channel, :calls 2, :sleeps [250]},
+ :refused-twice {:result :channel, :calls 3, :sleeps [250 1000]},
+ :up {:result :channel, :calls 1, :sleeps []}}
