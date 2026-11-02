@@ -36,6 +36,18 @@
    `(pr-str
      (into {} ((requiring-resolve 'hive-system.shell.core/exec!) ~command ~opts)))))
 
+(defn- timeout-result
+  "The execute shape for a deadline kill: the stdout and stderr the command
+   wrote before it (when the shell result carries them) plus the marker."
+  [{:keys [stdout stderr]}]
+  (let [stderr (str stderr)]
+    {:exit-code -1
+     :stdout    (str stdout)
+     :stderr    (str stderr
+                     (when-not (or (str/blank? stderr) (str/ends-with? stderr "\n")) "\n")
+                     "Command timed out")
+     :timed-out true}))
+
 (defn- ->result
   "Fold one exec! Result into bb-mcp.tools.bash/execute's shape.
 
@@ -43,11 +55,12 @@
   :shell/timeout to a top-level err, but this head calls whatever hive-system
   the running JVM happens to have loaded, which may still be the older build
   that returned {:ok {:error :shell/timeout}}. Checking the flat shape first
-  also keeps a timeout from being read as a spawn failure with no message."
+  also keeps a timeout from being read as a spawn failure with no message.
+  A timeout keeps the output captured before the deadline (`timeout-result`)."
   [{:keys [ok error message] :as r} timeout]
   (cond
-    (or (= :shell/timeout error) (= :shell/timeout (:error ok)))
-    {:exit-code -1 :stdout "" :stderr "Command timed out" :timed-out true}
+    (= :shell/timeout error) (timeout-result r)
+    (= :shell/timeout (:error ok)) (timeout-result ok)
 
     error {:exit-code -1 :stdout "" :stderr (str message) :error (str message)}
 
