@@ -55,6 +55,19 @@
       (is (= "Command timed out" (:stderr r)))
       (is (nil? (:error r)) "a timeout is a result, not a transport failure"))))
 
+(deftest killed-at-the-deadline-keeps-partial-output
+  (testing "the output captured before the deadline survives into the result and the rendered text"
+    (let [r (run {:command "echo step-one; sleep 2" :timeout_ms 200}
+                 {:error :shell/timeout :cmd "x" :timeout-ms 200 :duration-ms 201.0
+                  :stdout "step-one\n" :stderr "warn-one\n"})
+          text (:result (spec/format-result r))]
+      (is (true? (:timed-out r)))
+      (is (= "step-one\n" (:stdout r)))
+      (is (= "warn-one\nCommand timed out" (:stderr r)))
+      (is (str/includes? text "(timed out)"))
+      (is (str/includes? text "step-one"))
+      (is (str/includes? text "warn-one")))))
+
 (deftest never-started
   (testing "a process that could not be spawned surfaces its message"
     (let [r (run {:command "pwd" :working_directory "/nonexistent-xyz"}

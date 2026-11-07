@@ -230,10 +230,10 @@
   "The guard's verdict applied to one native call, then the call QUEUED.
 
    The guard runs first, on the caller's thread, so a denied call is refused
-   in-band and never started. An allowed call returns its ack at once; the
-   result arrives through `async/drain!` on a later response."
+   in-band and never started; it judges the call as made, `async: true` put
+   back (the tool never sees it). An allowed call returns its ack at once."
   [t name arguments]
-  (let [decision (guard/decide name (inject-agent-context arguments))]
+  (let [decision (guard/decide name (inject-agent-context (assoc arguments :async true)))]
     (if (guard/denied? decision)
       {:result (guard/refusal-text name decision) :error? true}
       {:result (cond-> (async/submit! name #(invoke-safely t arguments))

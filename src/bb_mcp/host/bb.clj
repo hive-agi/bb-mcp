@@ -1,7 +1,8 @@
 (ns bb-mcp.host.bb
   "Babashka/JVM adapter for bb-mcp.host.port/IByteChannel, over java.net.Socket."
   (:require [bb-mcp.host.port :as hp]
-            [cheshire.core :as cheshire])
+            [cheshire.core :as cheshire]
+            [bb-mcp.host.retry :as retry])
   (:import [java.net Socket]
            [java.io InputStream OutputStream
             BufferedInputStream BufferedOutputStream]))
@@ -16,14 +17,39 @@
   (close! [_]
     (.close socket)))
 
-(defn open
-  "Connect to {:host :port :timeout-ms}. => SocketChannel."
-  [{:keys [host port timeout-ms]}]
-  (let [sock (doto (Socket. ^String (or host "localhost") ^int port)
-               (.setSoTimeout (or timeout-ms 600000)))]
+(def connect-retry-policy
+  "Retry a refused connect twice (250 ms, then 1 s) and nothing else. A
+   ConnectException is raised by the Socket constructor before any byte is
+   written, so a retry can never repeat a request."
+  (assoc retry/default-policy
+         :retry? #(instance? java.net.ConnectException %)))
+
+(defn- connect!
+  "Open one Socket to `host`:`port` with read timeout `timeout-ms`.
+   => SocketChannel. Boundary I/O."
+  [host port timeout-ms]
+  (let [sock (doto (Socket. ^String host ^int port)
+               (.setSoTimeout timeout-ms))]
     (->SocketChannel sock
                      (BufferedInputStream. (.getInputStream sock))
                      (BufferedOutputStream. (.getOutputStream sock)))))
+
+(defn open-with
+  "Connect to {:host :port :timeout-ms} through `connect` (host port
+   timeout-ms -> channel), retried per `policy`, waiting with `sleep!`.
+   The seam `open` closes over; tests pass a stub connect and a recording
+   sleep."
+  [{:keys [connect policy sleep!]} {:keys [host port timeout-ms]}]
+  (retry/call-with-retry policy sleep!
+                         #(connect (or host "localhost") port (or timeout-ms 600000))))
+
+(defn open
+  "Connect to {:host :port :timeout-ms}. => SocketChannel."
+  [opts]
+  (open-with {:connect connect!
+              :policy connect-retry-policy
+              :sleep! #(Thread/sleep (long %))}
+             opts))
 
 (defrecord CheshireCodec []
   hp/IJsonCodec
