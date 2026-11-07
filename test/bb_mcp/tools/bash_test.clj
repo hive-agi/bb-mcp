@@ -129,3 +129,14 @@
                                               :stderr "" :timed-out false
                                               :detached true})]
     (is (str/includes? result "background process"))))
+
+(deftest a-command-that-reads-stdin-sees-eof-not-a-hang
+  ;; Friction 20261102194512-66626ddf: stdin was an open pipe nobody wrote or
+  ;; closed, so any program that reads it (cat, a kubectl exec credential
+  ;; plugin, ssh) blocked until the deadline and answered "Command timed out".
+  (let [[{:keys [exit-code timed-out stdout]} ms]
+        (elapsed-ms #(bash/execute {:command "cat; echo eof" :timeout_ms 5000}))]
+    (is (false? timed-out))
+    (is (= 0 exit-code))
+    (is (= "eof" (str/trim stdout)))
+    (is (< ms 4000))))
