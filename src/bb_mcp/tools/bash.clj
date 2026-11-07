@@ -97,6 +97,10 @@
    when output was still open after the command exited. Never blocks longer
    than `timeout_ms` plus a one-second flush.
 
+   stdin reads from /dev/null: nothing feeds the command, so an open pipe
+   would block every program that reads stdin (cat, a kubectl exec credential
+   plugin, ssh) until the deadline.
+
    Working directory resolution (CLARITY-I guarded input):
    1. Explicit :working_directory arg (caller override)
    2. :_caller_cwd (injected by inject-agent-context in core.clj — carries
@@ -122,7 +126,8 @@
   [{:keys [command working_directory timeout_ms _caller_cwd scope-probe scope-prefix]}]
   (let [timeout (or timeout_ms 180000)
         effective-dir (or working_directory _caller_cwd)
-        opts (cond-> {:out :stream
+        opts (cond-> {:in (io/file "/dev/null")
+                      :out :stream
                       :err :stream
                       :shutdown p/destroy-tree}
                effective-dir (assoc :dir effective-dir))
