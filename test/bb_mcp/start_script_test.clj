@@ -47,3 +47,29 @@
       (spit (str (fs/path project ".nrepl-port")) (str (free-port)))
       (is (not (str/includes? (:err (run-script project {"BB_MCP_NREPL_PORT" "7910"}))
                               "does not answer"))))))
+
+(defn- session-token
+  "Run scripts/session-id.sh's claude_session_token for PID against DIR."
+  [pid dir]
+  (let [r (p/sh {:continue true}
+                "bash" "-c" (str ". " (fs/absolutize "scripts/session-id.sh")
+                                 " && claude_session_token \"$1\" \"$2\" 0")
+                "_" (str pid) (str dir))]
+    (str/trim (:out r))))
+
+(deftest the-session-token-follows-the-claude-session-not-the-pid
+  ;; kanban 20261111164432-2be7b1e6: one Claude Code session moved from pid
+  ;; 2418990 to 512956; its caller id must not change with it.
+  (let [dir (str (fs/create-temp-dir {:prefix "claude-sessions"}))]
+    (spit (str (fs/path dir "512956.json"))
+          "{\"pid\":512956,\"sessionId\":\"a2f8cfa6-f21a-4932-a090-6b8ed142d5f0\",\"kind\":\"bg\"}")
+    (spit (str (fs/path dir "2418990.json"))
+          "{\"pid\":2418990,\"sessionId\":\"a2f8cfa6-f21a-4932-a090-6b8ed142d5f0\"}")
+    (spit (str (fs/path dir "7.json")) "{\"pid\":7,\"sessionId\":\"NOT-HEX\"}")
+    (testing "two processes of one session stamp one token"
+      (is (= "a2f8cfa6" (session-token 512956 dir)))
+      (is (= "a2f8cfa6" (session-token 2418990 dir))))
+    (testing "no usable record keeps the pid, as before"
+      (is (= "7" (session-token 7 dir)))
+      (is (= "424242" (session-token 424242 dir)))
+      (is (= "424242" (session-token 424242 (str dir "/missing")))))))

@@ -148,6 +148,12 @@
           (core/handle-method {:method "tools/call" :id 1
                                :params {:name "bash" :arguments {:command "true" :timeout_ms 960000 :async true}}})
           (deref release 5000 nil)
+          ;; `release` fires inside the tool, before the task buffers its
+          ;; result; wait for the task to finish so the fixture's drain takes
+          ;; it and it cannot leak into the next test's block.
+          (let [deadline (+ (System/currentTimeMillis) 5000)]
+            (while (and (seq (async/running-ids)) (< (System/currentTimeMillis) deadline))
+              (Thread/yield)))
           (is (true? (:async @seen-guard)))
           (is (= 960000 (:timeout_ms @seen-guard)))
           (is (not (contains? @seen-tool :async))))))))
