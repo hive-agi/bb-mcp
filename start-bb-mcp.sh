@@ -24,6 +24,10 @@
 #   BB_MCP_SENSE_PROJECTS / BB_MCP_SENSE_CLASSES - comma lists narrowing the senses
 #                           (classes e.g. ask,blocked,completed,truncated,error)
 #   BB_MCP_SENSE_POLL_MS  - poll interval (default 1000); BB_MCP_SENSE_REPLAY=1 skips priming
+#   BB_MCP_SESSION_ID - session token of the caller id coordinator:<token> (default: the
+#                       first 8 hex digits of the Claude Code session id read from
+#                       $CLAUDE_SESSIONS_DIR/<client pid>.json, else the client pid)
+#   CLAUDE_SESSIONS_DIR - Claude Code session records (default ~/.claude/sessions)
 #   BB_MCP_NO_UPDATE_CHECK - 1 turns off the one-line stderr notice printed when a
 #                           newer bb-mcp release exists (checked at most once a day)
 
@@ -116,7 +120,18 @@ resolve_cljw() {
     return 1
 }
 
+# The session token bb-mcp stamps into its caller id (`coordinator:<token>`):
+# the Claude Code session id's first 8 hex digits, stable when the session
+# moves to another process, else the client pid ($PPID). A launcher-set
+# BB_MCP_SESSION_ID always wins. See scripts/session-id.sh.
+# shellcheck source=scripts/session-id.sh
+. "$SCRIPT_DIR/scripts/session-id.sh"
+export_session_id() {
+    export BB_MCP_SESSION_ID="${BB_MCP_SESSION_ID:-$(claude_session_token "$PPID")}"
+}
+
 start_bb() {
+    export_session_id
     exec bb -m bb-mcp.core
 }
 
@@ -132,7 +147,7 @@ start_release_notice() {
 }
 
 start_cljw() {
-    export BB_MCP_SESSION_ID="${BB_MCP_SESSION_ID:-$PPID}"
+    export_session_id
     start_release_notice
     exec "$1" -cp src -m bb-mcp.core
 }
