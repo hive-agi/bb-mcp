@@ -107,3 +107,45 @@
         (nrepl/eval-code {:port (nrepl/hive-port) :code "1"
                           :open-fn (fn [{:keys [port]}] (swap! asked conj port) (refuse nil))}))
       (is (= [(nrepl/hive-port)] @asked)))))
+
+(deftest a-port-override-turns-socket-discovery-off
+  (let [base {:tmpdir "/tmp" :uid 1000
+              :read-socket-file {"/h/.nrepl-socket" "/f.sock"}
+              :exists? #{"/run/u/hive/mcp-nrepl.sock"}}
+        disk {"HIVE_MCP_DIR" "/h" "XDG_RUNTIME_DIR" "/run/u"}]
+    (testing "default port: .nrepl-socket, then the T2 path"
+      (is (= "/f.sock" (:path (nrepl/resolve-hive-socket (assoc base :getenv disk)))))
+      (is (= "/run/u/hive/mcp-nrepl.sock"
+             (:path (nrepl/resolve-hive-socket
+                     (assoc base :getenv {"XDG_RUNTIME_DIR" "/run/u"}))))))
+    (testing "HIVE_MCP_NREPL_PORT set: no discovered socket, TCP only"
+      (is (nil? (nrepl/resolve-hive-socket
+                 (assoc base :getenv (assoc disk "HIVE_MCP_NREPL_PORT" "7999"))))))
+    (testing "the deprecated alias is an override too"
+      (is (nil? (binding [*err* (java.io.StringWriter.)]
+                  (nrepl/resolve-hive-socket
+                   (assoc base :getenv (assoc disk "BB_MCP_HIVE_NREPL_PORT" "7999")))))))
+    (testing "an explicit HIVE_MCP_NREPL_SOCKET still wins over a port override"
+      (is (= {:path "/s.sock" :source :env :env-var "HIVE_MCP_NREPL_SOCKET"}
+             (nrepl/resolve-hive-socket
+              (assoc base :getenv (assoc disk "HIVE_MCP_NREPL_PORT" "7999"
+                                         "HIVE_MCP_NREPL_SOCKET" "/s.sock"))))))
+    (testing "a blank override is no override"
+      (is (= "/f.sock" (:path (nrepl/resolve-hive-socket
+                               (assoc base :getenv (assoc disk "HIVE_MCP_NREPL_PORT" " ")))))))))
+
+(deftest a-failed-socket-connect-falls-back-inside-the-timeout
+  (testing "TCP gets what is left of the caller's timeout, and the socket connect is bounded"
+    (let [unix-asked (atom nil) tcp-asked (atom nil)]
+      (nrepl/eval-code {:port 7910 :code "1" :timeout-ms 1000 :socket "/gone.sock"
+                        :open-unix-fn (fn [o] (reset! unix-asked o) (Thread/sleep 300)
+                                        (throw (java.net.SocketTimeoutException. "connect")))
+                        :open-fn (fn [o] (reset! tcp-asked o) (refuse nil))})
+      (is (<= (:connect-timeout-ms @unix-asked 1000) 500) "the connect leaves TCP at least half")
+      (is (<= (:timeout-ms @tcp-asked) 720) "TCP gets the time left, not a fresh timeout")
+      (is (pos? (:timeout-ms @tcp-asked)))))
+  (testing "no socket: TCP gets the whole timeout, as before"
+    (let [tcp-asked (atom nil)]
+      (nrepl/eval-code {:port 7910 :code "1" :timeout-ms 1000 :socket nil
+                        :open-fn (fn [o] (reset! tcp-asked o) (refuse nil))})
+      (is (= 1000 (:timeout-ms @tcp-asked))))))

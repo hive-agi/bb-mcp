@@ -3,7 +3,8 @@
   (:require [bb-mcp.host.port :as hp]
             [cheshire.core :as cheshire]
             [bb-mcp.host.retry :as retry])
-  (:import [java.net Socket SocketTimeoutException UnixDomainSocketAddress]
+  (:import [java.net Socket SocketTimeoutException UnixDomainSocketAddress
+            StandardProtocolFamily]
            [java.nio ByteBuffer]
            [java.nio.channels Selector SelectionKey]
            [java.io InputStream OutputStream
@@ -58,13 +59,25 @@
 (defn- await-ready!
   "Wait until `key`'s channel is ready for `ops`, at most `timeout-ms`
    (0 waits forever, as Socket's SO_TIMEOUT does). Throws
-   SocketTimeoutException when the wait runs out."
+   SocketTimeoutException only once the deadline has passed: `select`
+   returning 0 early (a `wakeup`, a spurious return) waits again for the
+   time that is left. An interrupted thread gets an IOException at once,
+   not a timeout and not a busy loop."
   [^Selector sel ^SelectionKey key ops timeout-ms]
   (.interestOps key (int ops))
-  (let [n (if (pos? timeout-ms) (.select sel (long timeout-ms)) (.select sel))]
-    (.clear (.selectedKeys sel))
-    (when (zero? n)
-      (throw (SocketTimeoutException. (str "Unix socket wait exceeded " timeout-ms " ms"))))))
+  (let [deadline (when (pos? timeout-ms) (+ (System/currentTimeMillis) timeout-ms))]
+    (loop []
+      (let [left (when deadline (- deadline (System/currentTimeMillis)))]
+        (when (and left (not (pos? left)))
+          (throw (SocketTimeoutException. (str "Unix socket wait exceeded " timeout-ms " ms"))))
+        (let [n (if left (.select sel (long left)) (.select sel))
+              ready? (or (pos? n) (.contains (.selectedKeys sel) key))]
+          (.clear (.selectedKeys sel))
+          (cond
+            ready? nil
+            (.isInterrupted (Thread/currentThread))
+            (throw (java.io.IOException. "interrupted waiting on a Unix socket"))
+            :else (recur)))))))
 
 (defrecord UnixChannel [^java.nio.channels.SocketChannel ch ^Selector sel ^SelectionKey key timeout-ms]
   hp/IByteChannel
@@ -85,21 +98,38 @@
     (try (.close sel) (finally (.close ch)))))
 
 (defn open-unix
-  "Connect to the Unix domain socket {:path :timeout-ms}. => UnixChannel.
-   NIO's Unix channels have no SO_TIMEOUT, so the channel is non-blocking
-   and every wait goes through a Selector bounded by :timeout-ms. Throws
-   when nothing listens at :path. Boundary I/O."
-  [{:keys [path timeout-ms]}]
-  (let [ch (java.nio.channels.SocketChannel/open
-            (UnixDomainSocketAddress/of ^String path))]
+  "Connect to the Unix domain socket {:path :timeout-ms :connect-timeout-ms}.
+   => UnixChannel. NIO's Unix channels have no SO_TIMEOUT, so the channel is
+   made non-blocking BEFORE it connects, and every wait (the connect
+   included) goes through a Selector: the connect is bounded by
+   :connect-timeout-ms (default :timeout-ms), reads and writes by
+   :timeout-ms. A listener with a full backlog therefore costs at most the
+   connect timeout, never a hang. Throws when nothing listens at :path or
+   the connect does not finish in time; on every failure the Selector and
+   the channel are both closed. Boundary I/O."
+  [{:keys [path timeout-ms connect-timeout-ms]}]
+  (let [timeout (long (or timeout-ms 600000))
+        connect-timeout (long (or connect-timeout-ms timeout))
+        addr (UnixDomainSocketAddress/of ^String path)
+        ch (java.nio.channels.SocketChannel/open StandardProtocolFamily/UNIX)
+        sel (volatile! nil)
+        done (volatile! false)]
     (try
       (.configureBlocking ch false)
-      (let [sel (Selector/open)
-            key (.register ch sel SelectionKey/OP_READ)]
-        (->UnixChannel ch sel key (long (or timeout-ms 600000))))
-      (catch Exception e
-        (.close ch)
-        (throw e)))))
+      (vreset! sel (Selector/open))
+      (let [key (.register ch ^Selector @sel SelectionKey/OP_CONNECT)]
+        (when-not (.connect ch addr)
+          (await-ready! @sel key SelectionKey/OP_CONNECT connect-timeout)
+          (when-not (.finishConnect ch)
+            (throw (SocketTimeoutException.
+                    (str "Unix socket connect did not finish in " connect-timeout " ms")))))
+        (let [uc (->UnixChannel ch @sel key timeout)]
+          (vreset! done true)
+          uc))
+      (finally
+        (when-not @done
+          (try (some-> ^Selector @sel .close) (catch Exception _ nil))
+          (try (.close ch) (catch Exception _ nil)))))))
 
 (defrecord CheshireCodec []
   hp/IJsonCodec

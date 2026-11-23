@@ -101,16 +101,50 @@
   (eval-code* [client code opts]
     "Eval `code` on `client`; returns {:result str :error? bool}."))
 
+(defn- now-ms
+  "Wall clock in ms, for the time a socket connect took."
+  []
+  (System/currentTimeMillis))
+
+(def unix-connect-ms
+  "Longest wait for a Unix socket CONNECT before TCP is tried. A live socket
+   accepts at once; only a listener with a full backlog makes a connect wait,
+   and that wait must not eat the whole eval timeout."
+  2000)
+
 (defn- open-channel
-  "Open the channel for one eval: the Unix socket at `socket` through
-   `open-unix-fn` when one is given and answers, else TCP through `open-fn`
-   exactly as without a socket. A socket that refuses, or is gone, costs one
-   failed connect and never fails the call."
+  "Open the channel for one eval.
+
+   Without `socket`: TCP through `open-fn` with `timeout-ms`, exactly as
+   before sockets existed.
+
+   With `socket`, the fallback rule:
+   - the socket is dialled first through `open-unix-fn`, its connect bounded
+     by `unix-connect-ms` or half of `timeout-ms`, whichever is shorter, so
+     TCP always has time left. A socket
+     that cannot be CONNECTED (missing, refused, connect timeout, or any throw
+     from `open-unix-fn`) falls back to TCP through `open-fn`, inside the
+     caller's timeout: TCP gets what is left of `timeout-ms`;
+   - once the socket is connected the request is sent there and nowhere
+     else. A write, read or timeout after that is the call's answer, never a
+     TCP retry: retrying would evaluate the code twice."
   [{:keys [host port socket open-fn open-unix-fn timeout-ms]}]
-  (or (when socket
-        (try (open-unix-fn {:path socket :timeout-ms timeout-ms})
-             (catch Exception _ nil)))
-      (open-fn {:host host :port port :timeout-ms timeout-ms})))
+  (if-not socket
+    (open-fn {:host host :port port :timeout-ms timeout-ms})
+    (let [t0 (now-ms)
+          bounded? (pos? timeout-ms)
+          connect-ms (if bounded?
+                       (max 1 (min unix-connect-ms (quot timeout-ms 2)))
+                       unix-connect-ms)]
+      (or (try (open-unix-fn {:path socket :timeout-ms timeout-ms
+                              :connect-timeout-ms connect-ms})
+               (catch Exception _ nil))
+          (let [left (if bounded? (- timeout-ms (- (now-ms) t0)) timeout-ms)]
+            (if (or (not bounded?) (pos? left))
+              (open-fn {:host host :port port :timeout-ms left})
+              (throw (ex-info (str "the Unix socket " socket " did not connect and its connect"
+                                   " used the whole " timeout-ms " ms timeout")
+                              {:socket socket :timeout-ms timeout-ms}))))))))
 
 (defrecord BencodeNReplClient [host port open-fn socket open-unix-fn]
   NReplClient
@@ -151,7 +185,12 @@
 
    Transport: hive-mcp's nREPL Unix socket first, then TCP `:port` as
    before. `:socket` names the socket path (nil: TCP only); omitted, it is
-   `resolve-hive-socket`'s path when `:port` is `hive-port` on localhost.
+   `resolve-hive-socket`'s path when `:port` is `hive-port` on localhost:
+   HIVE_MCP_NREPL_SOCKET when set; else none when HIVE_MCP_NREPL_PORT (or
+   its deprecated alias) set the port; else <HIVE_MCP_DIR>/.nrepl-socket,
+   then the T2 path. Fallback (`open-channel`): a socket that cannot be
+   connected falls back to TCP inside the timeout; a request already sent
+   on the socket is never retried over TCP.
    `:open-fn` injects the TCP IByteChannel adapter and `:open-unix-fn` the
    Unix one (defaults: the host seam's). A caller that injects only
    `:open-fn` gets TCP only, so a stub is never bypassed by a live socket."
@@ -365,12 +404,27 @@ Examples:
   (when (file-exists? path)
     (some-> (slurp path) str/trim not-empty)))
 
+(defn- port-overridden?
+  "True when the hive port comes from an env override: `hive-port-var` or one
+   of `deprecated-hive-port-vars` holds a number. Reads, never warns."
+  [getenv]
+  (boolean (some #(env-port getenv %) (cons hive-port-var deprecated-hive-port-vars))))
+
 (defn resolve-hive-socket
-  "hive-mcp's nREPL Unix socket and where it came from, or nil:
-     HIVE_MCP_NREPL_SOCKET env var          :env
-     <HIVE_MCP_DIR>/.nrepl-socket           :nrepl-socket-file (+ :file)
-     the T2 path for mcp-nrepl, if present  :standard-path
-   A caller dials it first and falls back to TCP when it does not answer.
+  "hive-mcp's nREPL Unix socket and where it came from, or nil (TCP only).
+
+   Discovery order:
+   (a) HIVE_MCP_NREPL_SOCKET is set: that socket.            :env
+   (b) else the hive port came from an env override
+       (HIVE_MCP_NREPL_PORT or a deprecated alias): nil, TCP only. The user
+       pointed the port at a JVM of their choosing; a socket found on disk
+       may belong to another one, so no socket is discovered.
+   (c) else (the default port 7910):
+       <HIVE_MCP_DIR>/.nrepl-socket                          :nrepl-socket-file (+ :file)
+       then the T2 path for mcp-nrepl, if present            :standard-path
+       then nil, TCP.
+   A caller dials the socket first and falls back to TCP when it cannot
+   connect (see `open-channel`).
    The 1-arity takes collaborators: :getenv, :tmpdir, :uid, :exists?
    (path -> bool), :read-socket-file (path -> string or nil)."
   ([] (resolve-hive-socket {}))
@@ -381,15 +435,16 @@ Examples:
      :as opts}]
    (or (when-let [p (some-> (getenv hive-socket-var) str/trim not-empty)]
          {:path p :source :env :env-var hive-socket-var})
-       (when-let [dir (some-> (getenv "HIVE_MCP_DIR") str/trim not-empty)]
-         (let [f (str dir "/.nrepl-socket")]
-           (when-let [p (read-socket-file f)]
-             {:path p :source :nrepl-socket-file :file f})))
-       (let [uid (if (contains? opts :uid) uid (process-uid))
-             tmp (if (contains? opts :tmpdir) tmpdir (System/getProperty "java.io.tmpdir"))]
-         (when-let [p (socket-path (getenv "XDG_RUNTIME_DIR") tmp uid hive-socket-service)]
-           (when (exists? p)
-             {:path p :source :standard-path}))))))
+       (when-not (port-overridden? getenv)
+         (or (when-let [dir (some-> (getenv "HIVE_MCP_DIR") str/trim not-empty)]
+               (let [f (str dir "/.nrepl-socket")]
+                 (when-let [p (read-socket-file f)]
+                   {:path p :source :nrepl-socket-file :file f})))
+             (let [uid (if (contains? opts :uid) uid (process-uid))
+                   tmp (if (contains? opts :tmpdir) tmpdir (System/getProperty "java.io.tmpdir"))]
+               (when-let [p (socket-path (getenv "XDG_RUNTIME_DIR") tmp uid hive-socket-service)]
+                 (when (exists? p)
+                   {:path p :source :standard-path}))))))))
 
 (defn execute
   "Execute Clojure code via nREPL. A connection failure names the port, where

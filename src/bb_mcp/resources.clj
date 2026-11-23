@@ -74,7 +74,8 @@
 (defn- hive-eval
   "Evaluate a data-built form in the hive host. URI is printed, never code.
    The port comes from `port-fn`, by default `nrepl/hive-port`: the port the
-   forwarded hive tools dial (BB_MCP_HIVE_NREPL_PORT, else 7910), never the
+   forwarded hive tools dial (HIVE_MCP_NREPL_PORT, else its deprecated alias
+   BB_MCP_HIVE_NREPL_PORT, else 7910), never the
    .nrepl-port of the project being worked on."
   ([form] (hive-eval form {}))
   ([form {:keys [eval-fn port-fn]

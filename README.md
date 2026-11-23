@@ -208,6 +208,16 @@ in `${XDG_CACHE_HOME:-~/.cache}/hive-mcp/bb-mcp-latest.edn`. On the cljw runtime
 `start-bb-mcp.sh` runs it as `bb-mcp notice` beside the server.
 `BB_MCP_NO_UPDATE_CHECK=1` turns it off.
 
+### Release notes
+
+- **Unreleased: Content-Length counts UTF-8 bytes.** On
+  the MCP stdio transport, a message framed with a `Content-Length` header is
+  now read as that many UTF-8 bytes, as the spec says; earlier releases
+  counted characters. Newline-delimited JSON and ASCII-only bodies are
+  unaffected. A client that counted characters and sent non-ASCII text with
+  `Content-Length` framing was relying on the old bug and must be fixed to
+  send the byte length.
+
 ### Manual configuration
 
 For a client that expands env vars in its JSON config (Claude Code's
@@ -255,7 +265,9 @@ client's cwd, and the nREPL port is resolved in this order:
 |----------|-------------|---------|
 | `BB_MCP_RUNTIME` | `cljw` (ClojureWasm) or `bb` (babashka). cljw falls back to bb when no usable cljw is found. | `cljw` |
 | `BB_MCP_NREPL_PORT` | nREPL port of the hive-mcp backend | `<project>/.nrepl-port`, else 7910 |
-| `BB_MCP_HIVE_NREPL_PORT` | nREPL port the forwarded hive tools, tool loading and MCP resources dial. Never read from `.nrepl-port` or `BB_MCP_NREPL_PORT`, so a project's own REPL is not mistaken for the hive host | 7910 |
+| `HIVE_MCP_NREPL_PORT` | nREPL port the forwarded hive tools, tool loading and MCP resources dial. Never read from `.nrepl-port` or `BB_MCP_NREPL_PORT`, so a project's own REPL is not mistaken for the hive host | 7910 |
+| `BB_MCP_HIVE_NREPL_PORT` | Deprecated alias of `HIVE_MCP_NREPL_PORT`, read only when that is unset; prints one stderr warning per process | unset |
+| `HIVE_MCP_NREPL_SOCKET` | Path of hive-mcp's nREPL Unix socket (see [The hive-mcp nREPL Unix socket](#the-hive-mcp-nrepl-unix-socket)) | discovered |
 | `BB_MCP_PROJECT_DIR` | Project directory (scopes tools; holds `.nrepl-port`) | the client's cwd |
 | `BB_MCP_TOOL_SCHEMA` | `compact` advertises each tool's core parameters and still accepts the rest (per-command params on demand via `command='carto describe' of='<cmd>'`); `full` advertises every tool parameter | `compact` |
 | `BB_MCP_NO_UPDATE_CHECK` | `1` turns off the startup release notice (see [Updates](#updates)) | off |
@@ -263,6 +275,29 @@ client's cwd, and the nREPL port is resolved in this order:
 
 Set these in the client's server entry only when you need a non-default
 value. Never put `HIVE_MCP_DIR` in an MCP client config: bb-mcp does not read it.
+
+`BB_MCP_NREPL_PORT` is unchanged and is a different thing: it is the project
+port `clojure_eval` uses, never the hive-mcp host's port.
+
+### The hive-mcp nREPL Unix socket
+
+Calls that land in the hive-mcp host (forwarded tools, tool loading,
+resources, guard, piggyback, the sense receptor, and `clojure_eval` when it
+resolves to the hive port) dial hive-mcp's nREPL Unix socket when one is
+found, else TCP on the hive port. The socket is chosen in this order:
+
+1. `HIVE_MCP_NREPL_SOCKET` is set: that socket.
+2. Else, when the port came from `HIVE_MCP_NREPL_PORT` (or its deprecated
+   alias `BB_MCP_HIVE_NREPL_PORT`): no socket, TCP only. The port was pointed
+   at a JVM of your choosing, and a socket on disk may belong to another one.
+3. Else (the default port 7910): `<HIVE_MCP_DIR>/.nrepl-socket`, then
+   `$XDG_RUNTIME_DIR/hive/mcp-nrepl.sock` (or `<tmpdir>/hive-<uid>/mcp-nrepl.sock`)
+   when it exists, then TCP.
+
+A socket that cannot be connected (missing, refused, connect timeout) falls
+back to TCP within the call's timeout. Once the request has been sent on the
+socket there is no TCP fallback: retrying would evaluate the code twice. With
+no socket found, bb-mcp talks TCP exactly as before.
 
 ### Caller identity
 
