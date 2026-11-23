@@ -2,6 +2,7 @@
   "MCP JSON-RPC protocol implementation for babashka.
    Handles stdio communication with Claude."
   (:require [bb-mcp.host.port :as hp]
+            [bb-mcp.wire.utf8 :as utf8]
             [clojure.string :as str]))
 
 ;; MCP Protocol constants
@@ -70,6 +71,22 @@
   (json-rpc-response id {:contents [content]}))
 
 ;; Stdio communication
+(defn read-body
+  "Read a body of `n-bytes` UTF-8 bytes from *in*, a character reader:
+   characters are taken until their UTF-8 size reaches `n-bytes`, so a
+   multi-byte character counts as the bytes it occupies on the wire, as the
+   Content-Length header means. Stops early at end of stream."
+  [n-bytes]
+  (let [sb (StringBuilder.)]
+    (loop [left n-bytes]
+      (if (pos? left)
+        (let [c (.read *in*)]
+          (if (neg? c)
+            (str sb)
+            (do (.append sb (char c))
+                (recur (- left (utf8/char-bytes c))))))
+        (str sb)))))
+
 (defn read-message
   "Read a JSON-RPC message from stdin.
    Supports both newline-delimited JSON (Claude Code) and Content-Length format."
@@ -87,11 +104,10 @@
           (let [content-length (parse-long (str/trim (subs line 16)))]
             ;; Read empty line after header
             (read-line)
-            ;; Read JSON body character by character
-            (let [sb (StringBuilder.)]
-              (dotimes [_ content-length]
-                (.append sb (char (.read *in*))))
-              (hp/json-decode (str sb))))
+            ;; Content-Length counts BYTES: read characters until their
+            ;; UTF-8 size reaches it, so a multi-byte body is read whole
+            ;; and the next message is not eaten.
+            (hp/json-decode (read-body content-length)))
 
           ;; Try to parse as JSON directly (newline-delimited format)
           (str/starts-with? line "{")

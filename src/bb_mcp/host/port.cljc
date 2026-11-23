@@ -3,7 +3,8 @@
    every runtime-specific byte primitive lives in an adapter below it.
 
    An adapter namespace supplies `(open opts) => IByteChannel`, where opts is
-   {:host str :port int :timeout-ms int}.")
+   {:host str :port int :timeout-ms int}. An adapter that can reach a Unix
+   domain socket also supplies `(open-unix {:path str :timeout-ms int})`.")
 
 (defprotocol IByteChannel
   "A bidirectional byte channel to a remote endpoint."
@@ -64,6 +65,17 @@
   "Open an IByteChannel to {:host :port :timeout-ms} via the host adapter."
   [opts]
   ((host-var 'open) opts))
+
+(defn open-unix
+  "Open an IByteChannel to the Unix domain socket {:path :timeout-ms} via the
+   host adapter's `open-unix`. Throws when the adapter has none, or when
+   nothing listens at :path: a caller that prefers the socket falls back to
+   `open` on any throw."
+  [opts]
+  (if-let [f (host-var 'open-unix)]
+    (f opts)
+    (throw (ex-info "This bb-mcp host adapter cannot open a Unix socket"
+                    {:adapter (adapter-ns)}))))
 
 (defn json-encode
   "Render `v` as a JSON string via the host adapter's codec."

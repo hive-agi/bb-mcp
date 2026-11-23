@@ -21,6 +21,7 @@
             [bb-mcp.concurrent-test]
             [bb-mcp.tools.always-load-test]
             [bb-mcp.tools.nrepl-test]
+            [bb-mcp.protocol-test]
             [bb-mcp.hive-port-test]
             [bb-mcp.tools.route-map-test]))
 
@@ -33,6 +34,7 @@
    'bb-mcp.tools.always-load-test
    'bb-mcp.tools.route-map-test
    'bb-mcp.tools.nrepl-test
+   'bb-mcp.protocol-test
    'bb-mcp.wire.bencode-test
    'bb-mcp.wire.bencode-props-test
    'bb-mcp.wire.bencode-mutation-test
@@ -53,7 +55,8 @@
   "Suites whose SUBJECT is a host primitive some runtime may not have. A
    runtime that cannot load one is told so by name — a suite that quietly
    vanishes is a falling assertion count, and that reads as green."
-  ['bb-mcp.tools.bash-test
+  ['bb-mcp.tools.nrepl-socket-test
+   'bb-mcp.tools.bash-test
    'bb-mcp.tools.bash.scope-test
    'bb-mcp.start-script-test])
 
