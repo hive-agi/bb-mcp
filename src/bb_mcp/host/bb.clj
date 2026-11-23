@@ -3,7 +3,9 @@
   (:require [bb-mcp.host.port :as hp]
             [cheshire.core :as cheshire]
             [bb-mcp.host.retry :as retry])
-  (:import [java.net Socket]
+  (:import [java.net Socket SocketTimeoutException UnixDomainSocketAddress]
+           [java.nio ByteBuffer]
+           [java.nio.channels Selector SelectionKey]
            [java.io InputStream OutputStream
             BufferedInputStream BufferedOutputStream]))
 
@@ -50,6 +52,54 @@
               :policy connect-retry-policy
               :sleep! #(Thread/sleep (long %))}
              opts))
+
+;; ── Unix domain socket (JDK NIO, T1) ───────────────────────────────────
+
+(defn- await-ready!
+  "Wait until `key`'s channel is ready for `ops`, at most `timeout-ms`
+   (0 waits forever, as Socket's SO_TIMEOUT does). Throws
+   SocketTimeoutException when the wait runs out."
+  [^Selector sel ^SelectionKey key ops timeout-ms]
+  (.interestOps key (int ops))
+  (let [n (if (pos? timeout-ms) (.select sel (long timeout-ms)) (.select sel))]
+    (.clear (.selectedKeys sel))
+    (when (zero? n)
+      (throw (SocketTimeoutException. (str "Unix socket wait exceeded " timeout-ms " ms"))))))
+
+(defrecord UnixChannel [^java.nio.channels.SocketChannel ch ^Selector sel ^SelectionKey key timeout-ms]
+  hp/IByteChannel
+  (write-bytes! [_ ba]
+    (let [bb (ByteBuffer/wrap ^bytes ba)]
+      (while (.hasRemaining bb)
+        (when (zero? (.write ch bb))
+          (await-ready! sel key SelectionKey/OP_WRITE timeout-ms)))
+      nil))
+  (read-bytes! [_ buf]
+    (let [bb (ByteBuffer/wrap ^bytes buf)]
+      (loop []
+        (let [n (.read ch bb)]
+          (if (zero? n)
+            (do (await-ready! sel key SelectionKey/OP_READ timeout-ms) (recur))
+            n)))))
+  (close! [_]
+    (try (.close sel) (finally (.close ch)))))
+
+(defn open-unix
+  "Connect to the Unix domain socket {:path :timeout-ms}. => UnixChannel.
+   NIO's Unix channels have no SO_TIMEOUT, so the channel is non-blocking
+   and every wait goes through a Selector bounded by :timeout-ms. Throws
+   when nothing listens at :path. Boundary I/O."
+  [{:keys [path timeout-ms]}]
+  (let [ch (java.nio.channels.SocketChannel/open
+            (UnixDomainSocketAddress/of ^String path))]
+    (try
+      (.configureBlocking ch false)
+      (let [sel (Selector/open)
+            key (.register ch sel SelectionKey/OP_READ)]
+        (->UnixChannel ch sel key (long (or timeout-ms 600000))))
+      (catch Exception e
+        (.close ch)
+        (throw e)))))
 
 (defrecord CheshireCodec []
   hp/IJsonCodec

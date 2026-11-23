@@ -44,6 +44,17 @@
   [{:keys [host port]}]
   (->CljwChannel (connect-fn (or host "localhost") port)))
 
+(def ^:private connect-unix-fn (host-fn 'cljw.net/connect-unix))
+
+(defn open-unix
+  "Connect to the Unix domain socket {:path} over `cljw.net/connect-unix`.
+   => CljwChannel, the same channel type as TCP. `:timeout-ms` is ignored as
+   in `open`. Throws when this cljw has no connect-unix or nothing listens."
+  [{:keys [path]}]
+  (if connect-unix-fn
+    (->CljwChannel (connect-unix-fn path))
+    (throw (ex-info "cljw.net/connect-unix is absent on this cljw" {:path path}))))
+
 (defn- json-safe
   "`v` with every collection cljw's `write-str` refuses (lists, seqs, sets)
    turned into a vector, so this codec writes what cheshire writes on bb: an

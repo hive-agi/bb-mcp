@@ -60,11 +60,12 @@ fi
 # A .nrepl-port outlives the REPL that wrote it. Say so at startup instead of
 # letting the first clojure_eval without a port fail against a dead port. Hive
 # tools, the guard, piggyback and the sense receptor are unaffected: they dial
-# the hive-mcp host (BB_MCP_HIVE_NREPL_PORT, else 7910).
+# the hive-mcp host (HIVE_MCP_NREPL_PORT, else the deprecated
+# BB_MCP_HIVE_NREPL_PORT, else 7910; its nREPL Unix socket first when present).
 if [[ -n "$PORT_FILE" ]] && ! port_answers "$NREPL_PORT"; then
     echo "start-bb-mcp.sh: warning: $PORT_FILE names nREPL port $NREPL_PORT, which does not answer;" \
          "clojure_eval without a port will fail there. Hive tools use the hive-mcp port" \
-         "(${BB_MCP_HIVE_NREPL_PORT:-7910})." >&2
+         "(${HIVE_MCP_NREPL_PORT:-${BB_MCP_HIVE_NREPL_PORT:-7910}})." >&2
 fi
 
 export BB_MCP_PROJECT_DIR="$PROJECT_DIR"
