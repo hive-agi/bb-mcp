@@ -1,7 +1,7 @@
 (ns bb-mcp.hive-port-test
   "guard, piggyback and the sense receptor all talk to the hive-mcp host, so
-   they dial `nrepl/hive-port` (BB_MCP_HIVE_NREPL_PORT, else 7910), never a
-   project's .nrepl-port. Each is called with a recording eval-fn and no
+   they dial `nrepl/hive-port` (HIVE_MCP_NREPL_PORT, else its deprecated
+   alias BB_MCP_HIVE_NREPL_PORT, else 7910), never a project's .nrepl-port. Each is called with a recording eval-fn and no
    port-fn, and the port it dialled is compared with hive-port. Nothing is
    redefined."
   (:require [clojure.test :refer [deftest is]]

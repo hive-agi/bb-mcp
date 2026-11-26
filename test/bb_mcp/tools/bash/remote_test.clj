@@ -126,7 +126,7 @@
       (is (str/includes? (:stderr r) "Tried localhost:7932."))
       (is (str/includes? (:stderr r) "hive-mcp JVM nREPL"))
       (is (str/includes? (:stderr r) "`hive-mcp` launcher"))
-      (is (str/includes? (:stderr r) "BB_MCP_HIVE_NREPL_PORT"))
+      (is (str/includes? (:stderr r) "HIVE_MCP_NREPL_PORT"))
       (is (str/includes? (:stderr r) "No local fallback"))
       (is (str/includes? (:stderr r) "BB_MCP_RUNTIME=bb")))))
 
