@@ -1,12 +1,10 @@
 name: staging-gate
 
-# staging is a GATE, not a mirror: a push to staging runs the suite against the
-# DECLARED classpath (no local.deps.edn), and only a green staging is promoted
-# to main, where release.yml mints the version. This workflow never publishes.
+# staging is a gate: a push to staging resolves the DECLARED classpath and runs
+# the suite. This workflow never publishes a release.
 #
-# Runs unchanged on GitHub Actions and Gitea Actions: the Clojure CLI comes from
-# the official installer, not DeLaGuardo/setup-clojure, whose GitHub API call
-# fails under Gitea's GITHUB_TOKEN.
+# Runs unchanged on GitHub Actions and Gitea Actions, so the Clojure CLI comes
+# from the official installer rather than DeLaGuardo/setup-clojure.
 #
 # Secrets (optional): MAVEN_USERNAME, MAVEN_TOKEN, for deps served only by the
 # private hive-gitea registry.
@@ -30,27 +28,42 @@ jobs:
     env:
       MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
       MAVEN_TOKEN: ${{ secrets.MAVEN_TOKEN }}
+      CLOJURE_CLI_VERSION: 1.12.7.1681
+      BABASHKA_VERSION: 1.13.230
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
+
+      # Caches the resolved dependency tree across runs, keyed on the files
+      # that declare it.
+      - name: Cache Maven and gitlibs
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: |
+            deps-${{ runner.os }}-
 
       - name: Setup Clojure CLI
         run: |
           set -euo pipefail
           curl -fsSL -o /tmp/clj-install.sh \
-            https://download.clojure.org/install/linux-install-1.12.4.1618.sh
+            "https://download.clojure.org/install/linux-install-${CLOJURE_CLI_VERSION}.sh"
           chmod +x /tmp/clj-install.sh
           sudo /tmp/clj-install.sh
           clojure --version
 
+      # Writes the registry and its credentials the resolver reads.
       - name: Private-registry credentials
         if: env.MAVEN_TOKEN != ''
         run: |
@@ -68,11 +81,43 @@ jobs:
           </server></servers></settings>
           EOF
 
-      # The pins must resolve from the registries before anything else is
-      # worth running: this is the step a dependency sweep can break.
+      # Resolves every pin from the registries before anything runs.
       - name: Resolve declared classpath
         run: clojure -P
 
+      # Runs the licence gate, for a repo whose deps.edn declares a :build
+      # alias that reaches hive-build.api. Skips on a repo without one.
+      - name: Verify licence
+        run: |
+          set -euo pipefail
+          has_build=$(clojure -M -e '(print (if (get-in (clojure.edn/read-string (slurp "deps.edn")) [:aliases :build]) "yes" "no"))')
+          if [ "$has_build" != "yes" ]; then
+            echo "no :build alias in deps.edn; skipping"
+            exit 0
+          fi
+          out=$(clojure -T:build verify-license :strict true 2>&1) || { printf '%s\n' "$out"; exit 1; }
+          printf '%s\n' "$out"
+          if printf '%s\n' "$out" | grep -qF 'WARNING: license inconsistency'; then
+            echo "licence drift: LICENSE, version.edn and SPDX headers disagree"
+            exit 1
+          fi
+
+      # Runs the babashka suite, for a repo whose bb.edn declares a test:bb
+      # task. Skips on a repo that has no bb.edn or no such task.
+      - name: Babashka tests
+        run: |
+          set -euo pipefail
+          if [ ! -f bb.edn ] || ! grep -qF 'test:bb' bb.edn; then
+            echo "no test:bb task in bb.edn; skipping"
+            exit 0
+          fi
+          curl -fsSL -o /tmp/bb.tar.gz \
+            "https://github.com/babashka/babashka/releases/download/v${BABASHKA_VERSION}/babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz"
+          sudo tar -xzf /tmp/bb.tar.gz -C /usr/local/bin bb
+          bb --version
+          bb test:bb
+
+      # Runs whichever test entry point deps.edn declares.
       - name: Test
         run: |
           set -euo pipefail
@@ -80,12 +125,12 @@ jobs:
           case "$mode" in
             main) clojure -M:test ;;
             exec) clojure -X:test ;;
-            # A :test alias that only adds paths: run it under cognitect's runner.
             paths) clojure -Sdeps '{:deps {io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}}}' -M:test -m cognitect.test-runner ;;
             *)
-              if [ -f bb.edn ] && grep -qE '^\s*test\s' bb.edn; then
-                curl -fsSL -o /tmp/bb-install https://raw.githubusercontent.com/babashka/babashka/master/install
-                sudo bash /tmp/bb-install
+              if [ -f bb.edn ] && grep -qF ' test' bb.edn; then
+                curl -fsSL -o /tmp/bb.tar.gz \
+                  "https://github.com/babashka/babashka/releases/download/v${BABASHKA_VERSION}/babashka-${BABASHKA_VERSION}-linux-amd64-static.tar.gz"
+                sudo tar -xzf /tmp/bb.tar.gz -C /usr/local/bin bb
                 bb test
               else
                 echo "no runnable :test alias or bb test task; declared classpath resolved"
