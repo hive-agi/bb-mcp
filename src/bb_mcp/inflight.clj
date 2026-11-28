@@ -64,7 +64,11 @@
     ;; Registered BEFORE submit, so a task that finishes at once still finds
     ;; (and removes) its own entry.
     (swap! calls assoc id {:token token :state state :future fut})
-    (deliver fut (.submit executor task))
+    ;; `executor` is nil on a runtime without threads; submit inline there so
+    ;; a missing pool can never be dereferenced as a null Java object.
+    (if executor
+      (deliver fut (.submit executor ^Callable task))
+      (do (task) (deliver fut nil)))
     nil))
 
 (defn cancel!
